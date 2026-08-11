@@ -1,0 +1,684 @@
+module sh.sysl.sdl3
+@tests
+@link("SDL3")
+
+import sysl.text.{cstring, from_cstring}
+import sysl.buf.{Buf, buf}
+
+// The package's own tests, run against a real SDL3.
+//
+// **They run headless.** `SDL_VIDEO_DRIVER=dummy` gives SDL a video backend that creates windows
+// and renderers and draws into memory, so everything here works on a machine with no display and
+// under a test runner with no session. The hint is set here rather than left to the environment so
+// that `sysl test .` is the whole command.
+//
+// **Half of this file exists to pin the transcribed constants.** Every `#define` in
+// `constants.sysl` was copied by hand, and a value that is wrong is usually wrong *quietly* — a
+// pixel format that decodes to the wrong colours, a colorspace that shifts greens, an event type
+// that simply never matches. So each is checked against something SDL itself computes from its own
+// header: the name it gives a format, the flags it reports for a window it made, the number it
+// stores in a texture's property bag. Nothing here trusts a number because it was typed carefully.
+
+extern "SDL_WasInit" sdl_was_init(flags: u32) -> u32
+extern "SDL_GetPixelFormatName" sdl_get_pixel_format_name(format: u32) -> *u8
+extern "SDL_GetAudioFormatName" sdl_get_audio_format_name(format: i32) -> *u8
+extern "SDL_GetWindowFlags" sdl_get_window_flags(window: *u8) -> u64
+extern "SDL_GetTextureScaleMode" sdl_get_texture_scale_mode(texture: *u8, mode: *i32) -> bool
+extern "SDL_GetTextureProperties" sdl_get_texture_properties(texture: *u8) -> u32
+extern "SDL_GetNumberProperty" sdl_get_number_property(props: u32, name: *u8, default: i64) -> i64
+extern "SDL_WriteSurfacePixel" sdl_write_surface_pixel(surface: *u8, x: i32, y: i32,
+                                                       r: u8, g: u8, b: u8, a: u8) -> bool
+
+// Bring SDL up headless. Every test that needs a window or a renderer starts here.
+headless() -> bool
+    set_hint(HINT_VIDEO_DRIVER, "dummy")
+    init(INIT_VIDEO)
+end headless
+
+format_name(f: u32) -> string = from_cstring(sdl_get_pixel_format_name(f)).unwrap_or("")
+
+// ---- layout ----
+
+// sysl's struct layout has to agree with C's, field for field, or reading a public struct and
+// filling an event union are both bets. These are the sizes clang computes for the same
+// declarations.
+@test
+the_layouts_agree_with_c()
+    assert_eq(sizeof(Color), 4usize, "SDL_Color is four bytes")
+    assert_eq(sizeof(Rect), 16usize, "SDL_Rect is four ints")
+    assert_eq(sizeof(FRect), 16usize, "SDL_FRect is four floats")
+    assert_eq(sizeof(FPoint), 8usize, "SDL_FPoint is two floats")
+    assert_eq(sizeof(Vertex), 32usize, "SDL_Vertex is eight floats, with no padding")
+    assert_eq(sizeof(SurfaceRec), 48usize, "SDL_Surface is 48 bytes")
+    assert_eq(sizeof(AudioSpec), 12usize, "SDL_AudioSpec is three 32-bit words")
+    assert_eq(sizeof(CFilter), 16usize, "SDL_DialogFileFilter is two pointers")
+
+// Every variant view is the union's own size, which is what makes reinterpreting one into another
+// safe — a view that came out short would be reading a field past the end of the storage SDL
+// filled.
+@test
+every_event_view_is_the_size_of_the_union()
+    assert_eq(sizeof(Event), 128usize, "SDL_Event is 128 bytes")
+    assert_eq(sizeof(KeyboardEvent), 128usize, "the keyboard view")
+    assert_eq(sizeof(MouseMotionEvent), 128usize, "the motion view")
+    assert_eq(sizeof(MouseButtonEvent), 128usize, "the button view")
+    assert_eq(sizeof(MouseWheelEvent), 128usize, "the wheel view")
+    assert_eq(sizeof(TextEvent), 128usize, "the text view")
+    assert_eq(sizeof(DropEvent), 128usize, "the drop view")
+    assert_eq(sizeof(WindowEvent), 128usize, "the window view")
+    assert_eq(sizeof(UserEvent), 128usize, "the user view")
+
+// ---- the transcribed constants ----
+
+// SDL names a pixel format from the bits packed into the value itself, so a name coming back right
+// says the whole encoding is right rather than just that the number matches something.
+@test
+the_pixel_formats_are_the_ones_sdl_names()
+    assert(headless(), "SDL_Init")
+
+    assert_eq(format_name(PIXELFORMAT_ARGB8888), "SDL_PIXELFORMAT_ARGB8888", "ARGB8888")
+    assert_eq(format_name(PIXELFORMAT_RGBA8888), "SDL_PIXELFORMAT_RGBA8888", "RGBA8888")
+    assert_eq(format_name(PIXELFORMAT_ABGR8888), "SDL_PIXELFORMAT_ABGR8888", "ABGR8888")
+    assert_eq(format_name(PIXELFORMAT_RGB24), "SDL_PIXELFORMAT_RGB24", "RGB24")
+    assert_eq(format_name(PIXELFORMAT_IYUV), "SDL_PIXELFORMAT_IYUV", "IYUV")
+    assert_eq(format_name(PIXELFORMAT_YV12), "SDL_PIXELFORMAT_YV12", "YV12")
+    assert_eq(format_name(PIXELFORMAT_NV12), "SDL_PIXELFORMAT_NV12", "NV12")
+    assert_eq(format_name(PIXELFORMAT_NV21), "SDL_PIXELFORMAT_NV21", "NV21")
+
+    quit()
+
+@test
+the_audio_formats_are_the_ones_sdl_names()
+    assert_eq(from_cstring(sdl_get_audio_format_name(AUDIO_F32)).unwrap_or(""),
+        "SDL_AUDIO_F32LE", "AUDIO_F32 is little-endian float32")
+    assert_eq(from_cstring(sdl_get_audio_format_name(AUDIO_S16)).unwrap_or(""),
+        "SDL_AUDIO_S16LE", "AUDIO_S16 is little-endian signed 16")
+
+// An init flag that named the wrong subsystem would bring up something else and say nothing.
+@test
+the_init_flags_name_the_right_subsystems()
+    set_hint(HINT_VIDEO_DRIVER, "dummy")
+
+    assert(init(INIT_VIDEO), "SDL_Init(INIT_VIDEO)")
+    assert(sdl_was_init(INIT_VIDEO) != 0, "video came up")
+    assert(sdl_was_init(INIT_AUDIO) == 0, "and audio did not, which is what makes this a test")
+
+    quit()
+
+// A window flag is a bit in a 64-bit mask, so one transcribed from the wrong line asks for a
+// different property entirely. SDL reports what it actually granted.
+@test
+the_window_flags_are_the_ones_sdl_reports()
+    assert(headless(), "SDL_Init")
+
+    val flags = WINDOW_RESIZABLE | WINDOW_HIDDEN | WINDOW_BORDERLESS
+    val w = create_window("flags", 64, 48, flags).expect("the window opened")
+    val got = sdl_get_window_flags(w.handle)
+
+    assert((got & WINDOW_RESIZABLE) != 0, "resizable")
+    assert((got & WINDOW_HIDDEN) != 0, "hidden")
+    assert((got & WINDOW_BORDERLESS) != 0, "borderless")
+    assert((got & WINDOW_FULLSCREEN) == 0, "and not fullscreen, which nothing asked for")
+
+    w.destroy()
+    quit()
+
+// A scale mode is an enumeration constant, so the check is a round trip through SDL's own storage.
+@test
+the_scale_modes_round_trip()
+    assert(headless(), "SDL_Init")
+
+    val w = create_window("scale", 32, 32, WINDOW_HIDDEN).expect("the window opened")
+    val r = w.create_renderer().expect("the renderer opened")
+    val made = r.create_texture(PIXELFORMAT_ARGB8888, TEXTUREACCESS_STREAMING, 16, 16)
+    val t = made.expect("the texture was made")
+
+    var mode: i32 = -1
+
+    assert(t.set_scale_mode(SCALEMODE_NEAREST), "set nearest")
+    assert(sdl_get_texture_scale_mode(t.handle, &mode), "read it back")
+    assert_eq(mode, SCALEMODE_NEAREST, "nearest survived")
+
+    assert(t.set_scale_mode(SCALEMODE_LINEAR), "set linear")
+    assert(sdl_get_texture_scale_mode(t.handle, &mode), "read it back")
+    assert_eq(mode, SCALEMODE_LINEAR, "linear survived")
+
+    t.destroy()
+    r.destroy()
+    w.destroy()
+    quit()
+
+// **The colorspace is the constant whose being wrong is quietest of all** — a YUV texture created
+// with the SD value decodes HD footage to shifted greens and reds, with no error anywhere. SDL
+// stores what it was given in the texture's own property bag, so it can be read back.
+@test
+a_colorspace_survives_into_the_texture()
+    assert(headless(), "SDL_Init")
+
+    val w = create_window("yuv", 32, 32, WINDOW_HIDDEN).expect("the window opened")
+    val r = w.create_renderer().expect("the renderer opened")
+    val made = r.create_yuv_texture(PIXELFORMAT_IYUV, TEXTUREACCESS_STREAMING, 16, 16,
+        COLORSPACE_BT709_LIMITED)
+    val t = made.expect("the YUV texture was made")
+
+    val props = sdl_get_texture_properties(t.handle)
+    val name = cstring("SDL.texture.colorspace")
+    val got = sdl_get_number_property(props, name.ptr, -1)
+
+    assert_eq(got, i64(COLORSPACE_BT709_LIMITED), "BT.709 limited is what the texture carries")
+
+    t.destroy()
+    r.destroy()
+    w.destroy()
+    quit()
+
+// A scancode is a USB HID usage id and SDL knows the name of each. A number copied off the wrong
+// row names a different key.
+@test
+the_scancodes_are_the_keys_they_say()
+    assert(headless(), "SDL_Init")
+
+    assert_eq(scancode_name(SCANCODE_A), "A", "A")
+    assert_eq(scancode_name(SCANCODE_Z), "Z", "Z")
+    assert_eq(scancode_name(SCANCODE_1), "1", "1")
+    assert_eq(scancode_name(SCANCODE_ESCAPE), "Escape", "Escape")
+    assert_eq(scancode_name(SCANCODE_SPACE), "Space", "Space")
+    assert_eq(scancode_name(SCANCODE_LEFT), "Left", "Left")
+    assert_eq(scancode_name(SCANCODE_F1), "F1", "F1")
+    assert_eq(scancode_name(SCANCODE_F12), "F12", "F12")
+    assert_eq(scancode_name(SCANCODE_KP_ENTER), "Keypad Enter", "the keypad enter")
+    assert_eq(scancode_name(SCANCODE_LSHIFT), "Left Shift", "left shift")
+    assert_eq(scancode_name(SCANCODE_RGUI), "Right GUI", "right GUI, the last of them")
+
+    quit()
+
+// A keycode is the other half — the logical key, whose value for anything non-printable is the
+// scancode with SDL's mask set. Getting the mask wrong makes every one of them nameless.
+@test
+the_keycodes_are_the_keys_they_say()
+    assert(headless(), "SDL_Init")
+
+    assert_eq(key_name(KEY_RETURN), "Return", "Return")
+    assert_eq(key_name(KEY_ESCAPE), "Escape", "Escape")
+    assert_eq(key_name(KEY_SPACE), "Space", "Space")
+    assert_eq(key_name(KEY_LEFT), "Left", "Left")
+    assert_eq(key_name(KEY_F1), "F1", "F1")
+    assert_eq(key_name(KEY_F12), "F12", "F12")
+    assert_eq(key_name(KEY_PAGEDOWN), "PageDown", "PageDown")
+
+    // And the two halves agree: the layout maps the physical key to the logical one.
+    assert_eq(key_from_scancode(SCANCODE_F1), KEY_F1, "F1's scancode maps to F1's keycode")
+    assert_eq(key_from_scancode(SCANCODE_RETURN), KEY_RETURN, "and Return to Return")
+
+    quit()
+
+// ---- events ----
+
+// An event type that was mistranscribed would simply never match, which no compiler notices. This
+// pushes one and gets it back.
+@test
+an_event_round_trips_through_the_queue()
+    assert(headless(), "SDL_Init")
+
+    assert(push_event(user_event(4242)), "SDL_PushEvent")
+
+    var seen = false
+
+    while true
+        poll_event() match
+            Some(e) ->
+                if e.kind == EVENT_USER
+                    assert_eq(e.user_code(), 4242i32, "the code came back through the union")
+                    seen = true
+            None -> break
+
+    assert(seen, "the user event was polled back")
+    quit()
+
+// **Every accessor's offset, checked in one place.** Each variant is built as C lays it out, then
+// reinterpreted as an `Event` and read back through the public accessors — so a field declared at
+// the wrong offset, or a view struct missing a pad, fails here rather than answering plausible
+// nonsense at run time. This is the test that stands in for the header nobody reads.
+@test
+every_variant_reads_its_own_fields()
+    var k = KeyboardEvent(EVENT_KEY_DOWN, 0, 77, 3, 0, SCANCODE_A, KEY_RETURN, KMOD_LSHIFT, 0,
+        true, true, [0; 90])
+    val kp: *Event = ptr_cast(&k)
+    val ke = kp[0]
+
+    assert_eq(ke.kind, EVENT_KEY_DOWN, "the kind is the first word of every event")
+    assert_eq(ke.timestamp, 77u64, "and the timestamp the second")
+    assert_eq(ke.window_id(), 3u32, "the window id sits where every windowed variant has it")
+    assert_eq(ke.key_scancode(), SCANCODE_A, "the scancode")
+    assert_eq(ke.key_code(), KEY_RETURN, "the keycode")
+    assert_eq(ke.key_mod(), KMOD_LSHIFT, "the modifier mask")
+    assert(ke.key_repeat(), "and the repeat flag, which is the last byte before the padding")
+
+    var m = MouseMotionEvent(EVENT_MOUSE_MOTION, 0, 0, 3, 0, 0, 12.5, 34.25, 1.0, 2.0, [0; 84])
+    val mp: *Event = ptr_cast(&m)
+    val me = mp[0]
+
+    assert_eq(me.mouse_x(), 12.5f32, "the motion x")
+    assert_eq(me.mouse_y(), 34.25f32, "the motion y")
+
+    var b = MouseButtonEvent(EVENT_MOUSE_BUTTON_DOWN, 0, 0, 3, 0, BUTTON_RIGHT, true, 2, 0,
+        5.0, 6.0, [0; 88])
+    val bp: *Event = ptr_cast(&b)
+    val be = bp[0]
+
+    assert_eq(be.mouse_button(), BUTTON_RIGHT, "which button")
+    assert_eq(be.mouse_clicks(), 2u8, "and how many clicks")
+    assert_eq(be.mouse_x(), 5.0f32, "a button event carries its position at the motion offsets")
+    assert_eq(be.mouse_y(), 6.0f32, "on both axes")
+
+    var w = MouseWheelEvent(EVENT_MOUSE_WHEEL, 0, 0, 3, 0, -1.0, 3.0, 0, 0.0, 0.0, [0; 84])
+    val wp: *Event = ptr_cast(&w)
+    val we = wp[0]
+
+    assert_eq(we.wheel_x(), -1.0f32, "the wheel x")
+    assert_eq(we.wheel_y(), 3.0f32, "and the wheel y, which is positive away from the user")
+
+    var d = DropEvent(EVENT_DROP_FILE, 0, 0, 3, 8.0, 9.0, 0, null, null, [0; 80])
+    val dp: *Event = ptr_cast(&d)
+    val de = dp[0]
+
+    assert_eq(de.drop_x(), 8.0f32, "the drop point x")
+    assert_eq(de.drop_y(), 9.0f32, "and y")
+    assert_eq(de.drop_data(), "", "a null payload reads as empty rather than trapping")
+    assert_eq(de.drop_source(), "", "and so does a null source")
+
+    var n = WindowEvent(EVENT_WINDOW_RESIZED, 0, 0, 3, 640, 480, [0; 100])
+    val np: *Event = ptr_cast(&n)
+    val ne = np[0]
+
+    assert_eq(ne.window_data1(), 640i32, "a resize carries its new width in data1")
+    assert_eq(ne.window_data2(), 480i32, "and its height in data2")
+
+    val ue = user_event(4242)
+
+    assert_eq(ue.kind, EVENT_USER, "a user event is a user event")
+    assert_eq(ue.user_code(), 4242i32, "carrying the code it was built with")
+
+    var t = TextEvent(EVENT_TEXT_INPUT, 0, 0, 3, 0, null, [0; 96])
+    val tp: *Event = ptr_cast(&t)
+
+    assert_eq(tp[0].text(), "", "and a null text pointer reads as empty")
+
+// Somewhere for a watch to write. **A closure captures a plain local by *copy*** (`12 §7`), so a
+// watch that counted into a `var int` beside it would count into its own field and the caller would
+// see nothing. Capturing a `&T` retains it, and a write through the reference reaches the one
+// object — which is the idiom every callback in this package is used with, so it is what the tests
+// use too.
+struct Tally
+    seen: Buf[i32]
+
+// The whole callback shape in one test: SDL calls a `*extern` trampoline, the trampoline finds the
+// sysl closure in module storage, and the closure writes through a `&T` it captured. A `*extern`
+// cannot capture, which is why the middle step exists at all.
+@test
+an_event_watch_reaches_a_closure()
+    assert(headless(), "SDL_Init")
+
+    val t: &Tally = Tally(buf())
+    val id = add_event_watch(e -> if e.kind == EVENT_USER then t.seen.push(e.user_code()))
+
+    assert(push_event(user_event(11)), "the first push")
+    assert(push_event(user_event(22)), "the second")
+
+    assert_eq(t.seen.len(), 2usize, "the watch fired for both")
+    assert_eq(t.seen[0], 11i32, "in order")
+    assert_eq(t.seen[1], 22i32, "in order")
+
+    remove_event_watch(id)
+    assert(push_event(user_event(33)), "a push after the watch was removed")
+    assert_eq(t.seen.len(), 2usize, "and the removed watch did not fire")
+
+    quit()
+
+// Two watches at once, each with its own closure, removed independently — which is what the id is
+// for and the case a single stored callback would get wrong.
+@test
+two_watches_are_told_apart()
+    assert(headless(), "SDL_Init")
+
+    val a: &Tally = Tally(buf())
+    val b: &Tally = Tally(buf())
+    val ia = add_event_watch(e -> if e.kind == EVENT_USER then a.seen.push(e.user_code()))
+    val ib = add_event_watch(e -> if e.kind == EVENT_USER then b.seen.push(e.user_code()))
+
+    assert(push_event(user_event(1)), "pushed")
+    assert_eq(a.seen.len(), 1usize, "the first watch saw it")
+    assert_eq(b.seen.len(), 1usize, "and so did the second")
+
+    remove_event_watch(ia)
+    assert(push_event(user_event(2)), "pushed again")
+    assert_eq(a.seen.len(), 1usize, "the removed one did not fire")
+    assert_eq(b.seen.len(), 2usize, "and the other still did")
+
+    remove_event_watch(ib)
+    quit()
+
+// ---- surfaces and textures ----
+
+@test
+a_surface_reads_its_own_fields()
+    assert(headless(), "SDL_Init")
+
+    val s = create_surface(16, 8, PIXELFORMAT_ARGB8888).expect("the surface was made")
+
+    assert_eq(s.width(), 16i32, "the width")
+    assert_eq(s.height(), 8i32, "the height")
+    assert(s.pitch() >= 64, "and a pitch of at least four bytes a pixel")
+    assert(s.pixels() != null, "and it points at pixels")
+
+    // The pitch is where getting `flags` wrong shows up: a `u64` there shifts every later field and
+    // the pitch comes back narrower than the width.
+    assert(s.pitch() >= s.width(), "the pitch is at least the width, which the layout decides")
+
+    assert(sdl_write_surface_pixel(s.handle, 3, 4, 10, 20, 30, 255), "wrote a pixel")
+
+    val c = s.read_pixel(3, 4).expect("read it back")
+
+    assert_eq(c.r, 10u8, "red")
+    assert_eq(c.g, 20u8, "green")
+    assert_eq(c.b, 30u8, "blue")
+    assert_eq(c.a, 255u8, "and opaque")
+
+    s.destroy()
+    quit()
+
+@test
+a_surface_uploads_to_a_texture()
+    assert(headless(), "SDL_Init")
+
+    val w = create_window("upload", 32, 32, WINDOW_HIDDEN).expect("the window opened")
+    val r = w.create_renderer().expect("the renderer opened")
+    val s = create_surface(16, 8, PIXELFORMAT_ARGB8888).expect("the surface was made")
+    val t = r.create_texture_from_surface(s).expect("the texture was made")
+    val (tw, th) = t.size()
+
+    assert_eq(tw, 16.0f32, "the texture kept the surface's width")
+    assert_eq(th, 8.0f32, "and its height")
+
+    s.destroy()
+    t.destroy()
+    r.destroy()
+    w.destroy()
+    quit()
+
+// ---- drawing ----
+
+@test
+a_renderer_draws_a_frame()
+    assert(headless(), "SDL_Init")
+
+    val w = create_window("draw", 64, 48, WINDOW_HIDDEN).expect("the window opened")
+    val r = w.create_renderer().expect("the renderer opened")
+
+    assert(r.clear_to(BLACK), "cleared")
+    assert(r.set_draw_color(rgb(255, 0, 0)), "set a colour")
+    assert(r.fill_rect(8.0, 8.0, 16.0, 16.0), "filled a rectangle")
+    assert(r.draw_rect(4.0, 4.0, 24.0, 24.0), "outlined one")
+    assert(r.draw_line(0.0, 0.0, 63.0, 47.0), "drew a line")
+    assert(r.draw_point(1.0, 1.0), "drew a point")
+    assert(r.fill_circle(32.0, 24.0, 10.0, rgb(0, 255, 0)), "filled a circle")
+    assert(r.thick_line(0.0, 47.0, 63.0, 0.0, 3.0, rgb(0, 0, 255)), "drew a thick line")
+    assert(r.present(), "presented")
+
+    val (ow, oh) = r.output_size()
+
+    assert_eq(ow, 64i32, "the output is the window's width")
+    assert_eq(oh, 48i32, "and its height")
+
+    r.destroy()
+    w.destroy()
+    quit()
+
+@test
+a_renderer_draws_into_a_texture()
+    assert(headless(), "SDL_Init")
+
+    val w = create_window("target", 32, 32, WINDOW_HIDDEN).expect("the window opened")
+    val r = w.create_renderer().expect("the renderer opened")
+    val made = r.create_texture(PIXELFORMAT_ARGB8888, TEXTUREACCESS_TARGET, 16, 16)
+    val t = made.expect("the target texture was made")
+
+    assert(r.set_target(t), "drew into the texture")
+    assert(r.clear_to(WHITE), "cleared it")
+    assert(r.reset_target(), "and back to the window")
+    assert(t.set_blend_mode(BLENDMODE_BLEND), "set a blend mode")
+    assert(t.set_alpha_mod(128), "and an alpha")
+    assert(r.copy(t), "blitted it whole")
+    assert(r.copy_at(t, 4.0, 4.0), "and at a point")
+    assert(r.copy_to(t, FRect(0.0, 0.0, 32.0, 32.0)), "and scaled")
+    assert(r.copy_part(t, FRect(0.0, 0.0, 8.0, 8.0), FRect(8.0, 8.0, 16.0, 16.0)), "and a part of it")
+
+    t.destroy()
+    r.destroy()
+    w.destroy()
+    quit()
+
+// ---- the geometry builders ----
+//
+// These need no renderer, which is the point of their being separate from the drawing calls: the
+// arithmetic is the only part that can be wrong, and it can be checked exactly.
+
+@test
+a_circle_is_a_fan()
+    val segs = circle_segments(20.0)
+    var verts: Buf[Vertex] = buf()
+    var idx: Buf[i32] = buf()
+
+    build_circle(&verts, &idx, 100.0, 50.0, 20.0, rgb(255, 0, 0), segs)
+
+    assert_eq(verts.len(), segs + 1, "one vertex per segment, and the centre")
+    assert_eq(idx.len(), segs * 3, "one triangle per segment")
+    assert_eq(verts[0].x, 100.0f32, "vertex zero is the centre")
+    assert_eq(verts[0].y, 50.0f32, "vertex zero is the centre")
+    assert_eq(verts[1].x, 120.0f32, "the first rim vertex is due east, at the radius")
+    assert_eq(idx[0], 0i32, "every triangle starts at the centre")
+    assert_eq(idx[(segs - 1) * 3 + 2], 1i32, "and the last one closes onto the first rim vertex")
+
+// The segment count is bounded at both ends, so a dot stays cheap and a disc stops getting
+// smoother once nobody could tell.
+@test
+the_segment_count_is_bounded()
+    assert_eq(circle_segments(0.0), 12usize, "a point still gets twelve")
+    assert_eq(circle_segments(-5.0), 12usize, "and so does a negative radius")
+    assert_eq(circle_segments(20.0), 32usize, "it grows with the radius")
+    assert_eq(circle_segments(1000.0), 64usize, "and stops at sixty-four")
+
+@test
+a_thick_line_is_a_quad()
+    var verts: Buf[Vertex] = buf()
+    var idx: Buf[i32] = buf()
+
+    assert(build_thick_line(&verts, &idx, 0.0, 0.0, 10.0, 0.0, 4.0, rgb(0, 0, 255)), "it built")
+    assert_eq(verts.len(), 4usize, "four corners")
+    assert_eq(idx.len(), 6usize, "two triangles")
+
+    // A horizontal line's normal is vertical, so the first corner sits half the width above the
+    // start. Getting the normal's sign or its scaling wrong is the whole of what can go wrong here.
+    assert_eq(verts[0].x, 0.0f32, "the first corner is at the start")
+    assert_eq(verts[0].y, 2.0f32, "offset by half the width along the normal")
+    assert_eq(verts[3].y, -2.0f32, "and the last one the other way")
+
+@test
+a_zero_length_thick_line_draws_nothing()
+    var verts: Buf[Vertex] = buf()
+    var idx: Buf[i32] = buf()
+
+    assert(!build_thick_line(&verts, &idx, 5.0, 5.0, 5.0, 5.0, 4.0, WHITE), "a point has no normal")
+    assert_eq(verts.len(), 0usize, "and nothing was built")
+
+// ---- colour ----
+
+@test
+a_colour_is_bytes_and_fractions()
+    val c = rgb(255, 128, 0)
+
+    assert_eq(c.a, 255u8, "rgb is opaque")
+    assert_eq(c.rf, 1.0f32, "full red is one")
+    assert_eq(c.bf, 0.0f32, "no blue is zero")
+    assert_eq(color_from_rgb(0xff8000).r, 255u8, "packed red")
+    assert_eq(color_from_rgb(0xff8000).g, 128u8, "packed green")
+    assert_eq(color_from_rgb(0xff8000).b, 0u8, "packed blue")
+
+@test
+a_blend_is_clamped_at_both_ends()
+    assert_eq(blend(BLACK, WHITE, 0.0).r, 0u8, "t = 0 is the first colour")
+    assert_eq(blend(BLACK, WHITE, 1.0).r, 255u8, "t = 1 is the second")
+    assert_eq(blend(BLACK, WHITE, 0.5).r, 127u8, "and halfway is halfway")
+    assert_eq(blend(BLACK, WHITE, -3.0).r, 0u8, "below zero clamps")
+    assert_eq(blend(BLACK, WHITE, 9.0).r, 255u8, "and above one clamps")
+
+// ---- windows ----
+
+@test
+a_window_reports_what_it_was_asked_for()
+    assert(headless(), "SDL_Init")
+
+    val w = create_window("title", 100, 60, WINDOW_HIDDEN).expect("the window opened")
+    val (ww, wh) = w.size()
+
+    assert_eq(ww, 100i32, "the width it was created with")
+    assert_eq(wh, 60i32, "and the height")
+    assert(w.set_title("another"), "retitled")
+    assert(w.set_size(120, 80), "resized")
+
+    val (nw, nh) = w.size()
+
+    assert_eq(nw, 120i32, "the new width")
+    assert_eq(nh, 80i32, "and the new height")
+
+    val (pw, ph) = w.size_in_pixels()
+
+    assert(pw >= nw, "the pixel size is at least the logical size")
+    assert(ph >= nh, "on both axes")
+    assert(w.id() != 0, "and the window has an id events can carry")
+
+    w.destroy()
+    quit()
+
+// ---- clipboard ----
+
+@test
+the_clipboard_round_trips()
+    assert(headless(), "SDL_Init")
+
+    assert(set_clipboard_text("hello, sysl"), "wrote it")
+    assert(has_clipboard_text(), "and it holds text")
+    assert_eq(clipboard_text(), "hello, sysl", "which came back")
+
+    quit()
+
+// SDL answers one allocation holding both an array of pointers and the strings they point at, and
+// this walks it to the terminator and frees it once. Some platforms report nothing, which is not a
+// failure.
+@test
+the_locales_are_readable()
+    assert(headless(), "SDL_Init")
+
+    val ls = preferred_locales()
+    var i: usize = 0
+
+    while i < ls.len()
+        assert(ls[i].language.len > 0, "a locale that is reported names a language")
+        assert(ls[i].tag().len >= ls[i].language.len, "and its tag carries at least that")
+        i += 1
+
+    quit()
+
+// ---- audio ----
+
+// SDL's dummy audio backend accepts a device and consumes what is pushed at it, so the whole queue
+// path runs on a machine with no sound card.
+@test
+an_audio_stream_takes_samples()
+    set_hint("SDL_AUDIO_DRIVER", "dummy")
+
+    assert(init_audio(), "the audio subsystem came up")
+
+    val s = open_audio_stream(48000, 1).expect("the stream opened")
+    var samples: []f32 = [0.0; 480]
+
+    for i in 0..<480usize do samples[i] = 0.5
+
+    assert(s.put(samples), "queued a buffer")
+    assert(s.queued() > 0, "and the device has not taken it all yet")
+    assert(s.set_gain(0.5), "set the gain")
+    assert_eq(s.gain(), 0.5f32, "which came back")
+    assert(s.clear(), "cleared it")
+    assert_eq(s.queued(), 0i32, "and nothing is queued")
+    assert(s.pause(), "paused")
+    assert(s.resume(), "resumed")
+
+    s.destroy()
+    quit_audio()
+    quit()
+
+// ---- file dialogs ----
+
+// The callback's tally, in module storage rather than captured, so that the two dialog tests count
+// the same thing and a closure body stays one line.
+private var dialog_runs: int = 0
+private var dialog_failures: int = 0
+
+note_dialog(r: DialogResult)
+    dialog_runs += 1
+
+    r match
+        Failed(_) -> dialog_failures += 1
+        Chosen(_) -> ()
+        Cancelled -> ()
+end note_dialog
+
+// **A panel must not open in a test, and this is how SDL lets one not.** Naming a dialog driver
+// that does not exist makes the dialog fail immediately — on every platform but Linux there is only
+// one backend and any value at all refuses — which runs the whole path this package owns: the
+// filters are built and held, the properties are set, `userdata` crosses into C and comes back, the
+// trampoline finds the closure, and the slot is released. Only the platform's own panel is skipped.
+@test
+a_dialog_reaches_its_callback_and_strands_nothing()
+    assert(headless(), "SDL_Init")
+    set_hint(HINT_FILE_DIALOG_DRIVER, "no-such-backend")
+
+    dialog_failures = 0
+    dialog_runs = 0
+
+    var filters: []FileFilter = [
+        FileFilter("Images", "png;jpg"),
+        FileFilter("Everything", "*"),
+    ]
+
+    val started = show_open_file_dialog(r -> note_dialog(r), None, filters, "", false,
+        "Pick one", "Open", "Never mind")
+
+    assert(started, "a slot was taken and the dialog was asked for")
+    assert_eq(dialog_runs, 1, "the callback ran once")
+    assert_eq(dialog_failures, 1, "with the failure SDL reported")
+    assert_eq(dialogs_pending(), 0usize, "and the slot was released, so nothing was stranded")
+
+    reset_hint(HINT_FILE_DIALOG_DRIVER)
+    quit()
+
+// Sixteen slots, and asking for a seventeenth answers `false` rather than losing one. The dialogs
+// above release their slots as they fail, so this only holds while a driver *would* have opened.
+@test
+a_dialog_that_cannot_take_a_slot_says_so()
+    assert(headless(), "SDL_Init")
+    set_hint(HINT_FILE_DIALOG_DRIVER, "no-such-backend")
+
+    dialog_runs = 0
+
+    var i = 0
+
+    while i < 20
+        assert(show_open_folder_dialog(r -> note_dialog(r)), "every one of these fails fast")
+        i += 1
+
+    assert_eq(dialog_runs, 20, "each callback ran, so each slot came back")
+    assert_eq(dialogs_pending(), 0usize, "and none is left")
+
+    reset_hint(HINT_FILE_DIALOG_DRIVER)
+    quit()

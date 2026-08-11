@@ -1,0 +1,350 @@
+module sh.sysl.sdl3
+@link("SDL3")
+
+import sysl.text.from_cstring
+import sysl.buf.{Buf, buf}
+
+// The event queue.
+//
+// **`SDL_Event` is a union of about thirty structs in 128 bytes**, and this is how it is read here:
+// one struct holding the header every event begins with, and a view struct per variant that the
+// accessors reinterpret into. The layout is SDL3's stable 64-bit ABI and `tests.sysl` pins the
+// size against what C computes, which is the check that a field added to the wrong view would fail.
+//
+// **A field is only meaningful for the matching `kind`.** That is what a union means, and no
+// binding can make it otherwise — asking a mouse event for its scancode reads whatever the mouse
+// event had at that offset. Match on `kind` first.
+
+// Any event. Every one of them begins with these three fields, and the rest is the variant.
+@align(8)
+struct Event
+    kind: u32
+    reserved: u32
+    timestamp: u64
+    body: [112]u8
+
+    // ---- keyboard ----
+
+    private key(self) -> *KeyboardEvent = ptr_cast(&self)
+
+    // The physical key, an SDL scancode — the same number `Keyboard.held` is indexed by, and the
+    // one to use for a game's movement keys, since it does not move with the layout.
+    key_scancode(self) -> i32 = self.key().scancode
+
+    // The *logical* key, an SDL keycode — what the layout says that physical key produces. This is
+    // the one a shortcut should compare against.
+    key_code(self) -> u32 = self.key().key
+
+    // The modifiers held while the key went down, a mask of the `KMOD_*` values. Test a
+    // side-agnostic modifier with the combined alias: `(e.key_mod() & KMOD_SHIFT) != 0`.
+    key_mod(self) -> u16 = self.key().mod
+
+    // Whether this is the operating system repeating a held key rather than a fresh press.
+    key_repeat(self) -> bool = self.key().repeat
+
+    // ---- mouse ----
+
+    // The cursor position a motion event reports, in window coordinates. A button event carries the
+    // position at the same offsets, so this reads either.
+    mouse_x(self) -> f32 = self.motion().x
+    mouse_y(self) -> f32 = self.motion().y
+
+    private motion(self) -> *MouseMotionEvent = ptr_cast(&self)
+
+    private button(self) -> *MouseButtonEvent = ptr_cast(&self)
+
+    // Which button — one of the `BUTTON_*` values.
+    mouse_button(self) -> u8 = self.button().button
+
+    // How many clicks in the run this one closes: 1 for a single, 2 for a double.
+    mouse_clicks(self) -> u8 = self.button().clicks
+
+    private wheel(self) -> *MouseWheelEvent = ptr_cast(&self)
+
+    // Scroll amounts. Positive `y` is away from the user.
+    wheel_x(self) -> f32 = self.wheel().x
+    wheel_y(self) -> f32 = self.wheel().y
+
+    // ---- text input ----
+
+    // The typed text of an `EVENT_TEXT_INPUT`, UTF-8. SDL owns the string and frees it once the
+    // event is handled, so it is copied out here.
+    private text_event(self) -> *TextEvent = ptr_cast(&self)
+
+    text(self) -> string
+        val p = self.text_event().text
+
+        if p == null then "" else from_cstring(p).unwrap_or("")
+    end text
+
+    // ---- drag and drop ----
+
+    private drop(self) -> *DropEvent = ptr_cast(&self)
+
+    // The dropped path or text. Empty for the payload-less `EVENT_DROP_BEGIN` and
+    // `EVENT_DROP_COMPLETE`. SDL frees the string after the event is handled, so this copies.
+    drop_data(self) -> string
+        val p = self.drop().data
+
+        if p == null then "" else from_cstring(p).unwrap_or("")
+    end drop_data
+
+    // The application the drag started in, where the platform says.
+    drop_source(self) -> string
+        val p = self.drop().source
+
+        if p == null then "" else from_cstring(p).unwrap_or("")
+    end drop_source
+
+    // Where in the window the drop landed. Not populated on `EVENT_DROP_BEGIN`.
+    drop_x(self) -> f32 = self.drop().x
+    drop_y(self) -> f32 = self.drop().y
+
+    // ---- windows ----
+
+    private window(self) -> *WindowEvent = ptr_cast(&self)
+
+    // Which window the event belongs to, matching `Window.id`. Every windowed variant carries it at
+    // the same offset, so this reads a key, mouse, text or window event alike.
+    window_id(self) -> u32 = self.window().window_id
+
+    // A window event's two payload words. For `EVENT_WINDOW_RESIZED` and
+    // `EVENT_WINDOW_PIXEL_SIZE_CHANGED` they are the new width and height.
+    window_data1(self) -> i32 = self.window().data1
+    window_data2(self) -> i32 = self.window().data2
+
+    // ---- user events ----
+
+    private user(self) -> *UserEvent = ptr_cast(&self)
+
+    // The `code` a program put on an event it pushed itself.
+    user_code(self) -> i32 = self.user().code
+end Event
+
+@align(8)
+struct KeyboardEvent
+    kind: u32
+    reserved: u32
+    timestamp: u64
+    window_id: u32
+    which: u32
+    scancode: i32
+    key: u32
+    mod: u16
+    raw: u16
+    down: bool
+    repeat: bool
+    tail: [90]u8
+
+@align(8)
+struct MouseMotionEvent
+    kind: u32
+    reserved: u32
+    timestamp: u64
+    window_id: u32
+    which: u32
+    state: u32
+    x: f32
+    y: f32
+    xrel: f32
+    yrel: f32
+    tail: [84]u8
+
+@align(8)
+struct MouseButtonEvent
+    kind: u32
+    reserved: u32
+    timestamp: u64
+    window_id: u32
+    which: u32
+    button: u8
+    down: bool
+    clicks: u8
+    pad: u8
+    x: f32
+    y: f32
+    tail: [88]u8
+
+@align(8)
+struct MouseWheelEvent
+    kind: u32
+    reserved: u32
+    timestamp: u64
+    window_id: u32
+    which: u32
+    x: f32
+    y: f32
+    direction: u32
+    mouse_x: f32
+    mouse_y: f32
+    tail: [84]u8
+
+@align(8)
+struct TextEvent
+    kind: u32
+    reserved: u32
+    timestamp: u64
+    window_id: u32
+    pad: u32
+    text: *u8
+    tail: [96]u8
+
+@align(8)
+struct DropEvent
+    kind: u32
+    reserved: u32
+    timestamp: u64
+    window_id: u32
+    x: f32
+    y: f32
+    pad: u32
+    source: *u8
+    data: *u8
+    tail: [80]u8
+
+@align(8)
+struct WindowEvent
+    kind: u32
+    reserved: u32
+    timestamp: u64
+    window_id: u32
+    data1: i32
+    data2: i32
+    tail: [100]u8
+
+@align(8)
+struct UserEvent
+    kind: u32
+    reserved: u32
+    timestamp: u64
+    window_id: u32
+    code: i32
+    data1: *u8
+    data2: *u8
+    tail: [88]u8
+
+extern "SDL_PollEvent" sdl_poll_event(event: *Event) -> bool
+extern "SDL_WaitEvent" sdl_wait_event(event: *Event) -> bool
+extern "SDL_WaitEventTimeout" sdl_wait_event_timeout(event: *Event, ms: i32) -> bool
+extern "SDL_PushEvent" sdl_push_event(event: *Event) -> bool
+extern "SDL_PumpEvents" sdl_pump_events()
+extern "SDL_FlushEvents" sdl_flush_events(min: u32, max: u32)
+extern "SDL_AddEventWatch" sdl_add_event_watch(f: *extern(*u8, *Event) -> bool, ud: *u8) -> bool
+extern "SDL_RemoveEventWatch" sdl_remove_event_watch(f: *extern(*u8, *Event) -> bool, ud: *u8)
+
+// An empty event, which is what the polling calls are handed to fill.
+empty_event() -> Event = Event(0, 0, 0, [0; 112])
+
+// The next pending event, or nothing when the queue is empty. This is the loop a program runs at
+// the top of every frame.
+poll_event() -> Option[Event]
+    var e = empty_event()
+
+    if sdl_poll_event(&e) then Some(e) else None
+end poll_event
+
+// Block until an event arrives. For a program that draws only when something changes — an editor
+// rather than a game — this is what keeps it off the processor between keystrokes.
+wait_event() -> Option[Event]
+    var e = empty_event()
+
+    if sdl_wait_event(&e) then Some(e) else None
+end wait_event
+
+// Block for at most this many milliseconds. Nothing means the wait timed out.
+wait_event_timeout(ms: i32) -> Option[Event]
+    var e = empty_event()
+
+    if sdl_wait_event_timeout(&e, ms) then Some(e) else None
+end wait_event_timeout
+
+// Put an event on the queue. A program's own events use a `kind` at or above `EVENT_USER`.
+push_event(e: Event) -> bool
+    var c = e
+
+    sdl_push_event(&c)
+end push_event
+
+// A user event carrying a code, which is the usual way one part of a program wakes another.
+//
+// **It is built as a `UserEvent` and reinterpreted, rather than filled through the views above**,
+// because those take `self` by value: the pointer they answer points into the method's own copy, so
+// reading through it is fine and writing through it would write into storage that is about to go.
+// That is why they are private, and why anything that *builds* an event constructs the variant.
+user_event(code: i32) -> Event
+    var u = UserEvent(EVENT_USER, 0, 0, 0, code, null, null, [0; 88])
+    val p: *Event = ptr_cast(&u)
+
+    p[0]
+end user_event
+
+// Gather pending input from the platform without taking anything off the queue. `poll_event` does
+// this itself, so it is only needed by a program that reads `Keyboard.held` or `mouse_state`
+// without polling.
+pump_events() = sdl_pump_events()
+
+// Discard every queued event whose kind falls in the range, inclusive.
+flush_events(min: u32, max: u32) = sdl_flush_events(min, max)
+
+// ---- event watches ----
+//
+// **SDL calls a C function pointer for every event as it is pumped, and a `*extern` cannot
+// capture** — so what a closure API needs is a single static trampoline registered with SDL and the
+// closures kept in module storage where the trampoline can find them again. That is the same shape
+// the Scala binding to this library uses, for the same reason.
+//
+// A watch fires on the thread that pumps events, which is the main thread, so nothing here crosses
+// a thread boundary.
+
+struct Watch
+    id: int
+    f: &Fn(Event) -> unit
+
+private var watches: Buf[Watch] = buf()
+private var next_watch_id: int = 0
+private var watch_registered: bool = false
+
+// The one function pointer SDL ever holds. Answering `true` leaves the event on the queue for the
+// ordinary `poll_event` loop to see as well, which is what a watch is for — observing, not
+// filtering.
+watch_trampoline(ud: *u8, ev: *Event) -> bool
+    val e = ev[0]
+
+    for i in 0..<watches.len() do watches[i].f(e)
+    true
+end watch_trampoline
+
+// Call `f` for every event as it is pumped, *before* it reaches the queue. Answers an id for
+// `remove_event_watch`.
+//
+// This is how a program reacts to a resize while it is still inside the platform's modal drag loop,
+// which is the case `poll_event` cannot reach: on macOS and Windows a live window drag does not
+// return to the application's own loop until the mouse comes up.
+add_event_watch(f: &Fn(Event) -> unit) -> int
+    if !watch_registered
+        sdl_add_event_watch(&watch_trampoline, null)
+        watch_registered = true
+
+    val id = next_watch_id
+
+    next_watch_id += 1
+    watches.push(Watch(id, f))
+    id
+end add_event_watch
+
+// Stop calling the watch with this id. The trampoline is unregistered from SDL once the last one
+// goes, so a program that adds none pays nothing.
+remove_event_watch(id: int)
+    var i: usize = 0
+
+    while i < watches.len()
+        if watches[i].id == id
+            watches.remove(i)
+            break
+
+        i += 1
+
+    if watches.len() == 0 && watch_registered
+        sdl_remove_event_watch(&watch_trampoline, null)
+        watch_registered = false
+end remove_event_watch

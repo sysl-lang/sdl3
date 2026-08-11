@@ -1,0 +1,50 @@
+// SDL3 — windows, rendering, events, input and audio, bound to the library the machine has.
+//
+// This is the block a consumer writes to reach this package:
+//
+//     dependencies {
+//       sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.1.0" }
+//     }
+//
+// The coordinate is identity rather than a URL, so it carries no `https://`, and the version is the
+// tag `v0.1.0` on this repository.
+//
+// **SDL3 has to be installed.** Nothing is vendored here: SDL is a large C project with its own
+// build system and its own platform backends, and a package that carried it would be carrying a
+// port rather than a binding. `brew install sdl3` on a Mac, the distribution's package elsewhere.
+//
+// **A build needs the prefix on the command line**, because a toolchain searches its own
+// directories and Homebrew's is not one of them:
+//
+//     sysl run prog.sysl --include-path /opt/homebrew/include --link-path /opt/homebrew/lib
+//
+// That is deliberate and is not a gap. `15 §8` refuses both a `@link_path` attribute and a
+// `package.hocon` field for it, because where a prefix lives is a fact about somebody's laptop
+// rather than a property of the package. `LIBRARY_PATH` and `CPATH` work too, since clang reads
+// them, and are the better answer on a machine where the setting never changes.
+//
+// **The companion libraries are separate packages, and that is forced rather than chosen.** A link
+// directive is never pruned (`LinkDirectives`: "nothing is pruned"), so a single package holding
+// the text, image and mixer bindings would put `-lSDL3_ttf -lSDL3_image -lSDL3_mixer` on the link
+// line of every program that used any of it — and a machine with only SDL3 installed could not link
+// a program that only draws rectangles. So: `sdl3-ttf`, `sdl3-image` and `sdl3-mixer` each depend
+// on this one and each name their own library.
+
+package {
+  name    = "sdl3"
+  version = "0.1.0"
+}
+
+// **`posix`, because SDL is a hosted library.** It opens devices, starts threads, talks to a window
+// server; there is no freestanding target this works on, and saying so turns "this cannot work
+// there" into one refusal rather than a link error naming `SDL_Init`.
+//
+// **`alloc`, because the binding allocates.** A `CString` copied for every C call that takes text,
+// the buffer a vertex array is built in, the event union polled into — all of it is sysl storage
+// with a lifetime, which is what keeps this side from ever having to free what SDL handed back.
+//
+// `posix` implies `os`, so that one is not written out.
+requires {
+  alloc = true
+  posix = true
+}

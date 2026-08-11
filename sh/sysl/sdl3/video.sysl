@@ -1,0 +1,171 @@
+module sh.sysl.sdl3
+@link("SDL3")
+
+import sysl.text.cstring
+
+// Windows and displays.
+//
+// **A handle is a one-field struct over the pointer SDL gave**, which costs nothing at run time and
+// buys the methods. SDL allocates it and SDL frees it, so there is no size for this side to know
+// and no storage for it to own — which is why none of these has a destructor: `destroy` is written
+// where the program decides the window is finished, exactly as it is in C. A destructor would mean
+// holding every handle behind a `&T`, and a heap box per texture is a real cost in a draw loop.
+//
+// **Anything that creates a handle answers `Option`.** SDL says "failed" with a null pointer and
+// the reason in `error()`; an `Option` is the same information in the shape the rest of the
+// language already reads, and it means a null handle cannot be passed on by accident.
+
+// A rectangle in integer screen coordinates — `SDL_Rect`.
+struct Rect
+    x: i32
+    y: i32
+    w: i32
+    h: i32
+
+// A rectangle in the floating-point coordinates the renderer works in — `SDL_FRect`. Every drawing
+// call takes these, which is the change from SDL2 that removed its 16-bit clamping.
+struct FRect
+    x: f32
+    y: f32
+    w: f32
+    h: f32
+
+// A point in renderer coordinates — `SDL_FPoint`.
+struct FPoint
+    x: f32
+    y: f32
+
+extern "SDL_CreateWindow" sdl_create_window(title: *u8, w: i32, h: i32, flags: u64) -> *u8
+extern "SDL_DestroyWindow" sdl_destroy_window(window: *u8)
+extern "SDL_SetWindowPosition" sdl_set_window_position(window: *u8, x: i32, y: i32) -> bool
+extern "SDL_GetWindowPosition" sdl_get_window_position(window: *u8, x: *i32, y: *i32) -> bool
+extern "SDL_SetWindowSize" sdl_set_window_size(window: *u8, w: i32, h: i32) -> bool
+extern "SDL_GetWindowSize" sdl_get_window_size(window: *u8, w: *i32, h: *i32) -> bool
+extern "SDL_GetWindowSizeInPixels" sdl_get_window_size_in_pixels(window: *u8, w: *i32, h: *i32) -> bool
+extern "SDL_GetWindowPixelFormat" sdl_get_window_pixel_format(window: *u8) -> u32
+extern "SDL_SetWindowTitle" sdl_set_window_title(window: *u8, title: *u8) -> bool
+extern "SDL_SetWindowFullscreen" sdl_set_window_fullscreen(window: *u8, fullscreen: bool) -> bool
+extern "SDL_SetWindowResizable" sdl_set_window_resizable(window: *u8, resizable: bool) -> bool
+extern "SDL_ShowWindow" sdl_show_window(window: *u8) -> bool
+extern "SDL_HideWindow" sdl_hide_window(window: *u8) -> bool
+extern "SDL_RaiseWindow" sdl_raise_window(window: *u8) -> bool
+extern "SDL_GetWindowID" sdl_get_window_id(window: *u8) -> u32
+extern "SDL_StartTextInput" sdl_start_text_input(window: *u8) -> bool
+extern "SDL_StopTextInput" sdl_stop_text_input(window: *u8) -> bool
+
+extern "SDL_GetPrimaryDisplay" sdl_get_primary_display() -> u32
+extern "SDL_GetDisplayForWindow" sdl_get_display_for_window(window: *u8) -> u32
+extern "SDL_GetDisplayUsableBounds" sdl_get_display_usable_bounds(display: u32, rect: *Rect) -> bool
+extern "SDL_GetDisplayBounds" sdl_get_display_bounds(display: u32, rect: *Rect) -> bool
+
+// An operating-system window.
+struct Window
+    handle: *u8
+
+    // Make a renderer for this window. `name` selects a render driver by name; the empty string
+    // lets SDL pick the best one, which is what a program almost always wants.
+    create_renderer(self, name: string = "") -> Option[Renderer]
+        val r = if name == "" then
+                sdl_create_renderer(self.handle, null)
+            else
+                val n = cstring(name)
+
+                sdl_create_renderer(self.handle, n.ptr)
+
+        if r == null then None else Some(Renderer(r))
+    end create_renderer
+
+    // SDL3 has no creation-time position, so a window that wants one sets it here. `x` and `y` may
+    // be `WINDOWPOS_CENTERED` or `WINDOWPOS_UNDEFINED`.
+    set_position(self, x: i32, y: i32) -> bool = sdl_set_window_position(self.handle, x, y)
+
+    position(self) -> (i32, i32)
+        var x: i32 = 0
+        var y: i32 = 0
+
+        sdl_get_window_position(self.handle, &x, &y)
+        (x, y)
+    end position
+
+    set_size(self, w: i32, h: i32) -> bool = sdl_set_window_size(self.handle, w, h)
+
+    // The logical size, in screen coordinates.
+    size(self) -> (i32, i32)
+        var w: i32 = 0
+        var h: i32 = 0
+
+        sdl_get_window_size(self.handle, &w, &h)
+        (w, h)
+    end size
+
+    // The size in physical pixels, which differs from `size` on a high-density display. A renderer
+    // owning a backbuffer sizes it from this one.
+    size_in_pixels(self) -> (i32, i32)
+        var w: i32 = 0
+        var h: i32 = 0
+
+        sdl_get_window_size_in_pixels(self.handle, &w, &h)
+        (w, h)
+    end size_in_pixels
+
+    pixel_format(self) -> u32 = sdl_get_window_pixel_format(self.handle)
+
+    set_title(self, title: string) -> bool
+        val t = cstring(title)
+
+        sdl_set_window_title(self.handle, t.ptr)
+    end set_title
+
+    set_fullscreen(self, on: bool) -> bool = sdl_set_window_fullscreen(self.handle, on)
+
+    set_resizable(self, on: bool) -> bool = sdl_set_window_resizable(self.handle, on)
+
+    show(self) -> bool = sdl_show_window(self.handle)
+
+    hide(self) -> bool = sdl_hide_window(self.handle)
+
+    raise(self) -> bool = sdl_raise_window(self.handle)
+
+    // The id events carry in their `window_id` field, which is how a program with more than one
+    // window tells which an event belongs to.
+    id(self) -> u32 = sdl_get_window_id(self.handle)
+
+    // Begin delivering `EVENT_TEXT_INPUT` for this window, and bring up the platform's on-screen or
+    // IME keyboard where it has one. A text field turns this on when it takes focus and off when it
+    // loses it; the typed text is read with `Event.text`.
+    start_text_input(self) -> bool = sdl_start_text_input(self.handle)
+
+    stop_text_input(self) -> bool = sdl_stop_text_input(self.handle)
+
+    // The display this window is mostly on, or 0 if SDL cannot tell.
+    display(self) -> u32 = sdl_get_display_for_window(self.handle)
+
+    destroy(self) = sdl_destroy_window(self.handle)
+end Window
+
+// Create a window. `flags` is a mask of the `WINDOW_*` values.
+create_window(title: string, width: i32, height: i32, flags: u64 = 0) -> Option[Window]
+    val t = cstring(title)
+    val w = sdl_create_window(t.ptr, width, height, flags)
+
+    if w == null then None else Some(Window(w))
+end create_window
+
+// The id of the primary display, or 0 if none is reported.
+primary_display() -> u32 = sdl_get_primary_display()
+
+// A display's whole area in screen coordinates.
+display_bounds(display: u32) -> Option[Rect]
+    var r = Rect(0, 0, 0, 0)
+
+    if sdl_get_display_bounds(display, &r) then Some(r) else None
+end display_bounds
+
+// A display's *usable* area — the desktop minus whatever the system reserves, a menu bar or a
+// taskbar. A window sized within it stays fully visible, which is what a program that wants to open
+// "as large as fits" should measure against rather than `display_bounds`.
+display_usable_bounds(display: u32) -> Option[Rect]
+    var r = Rect(0, 0, 0, 0)
+
+    if sdl_get_display_usable_bounds(display, &r) then Some(r) else None
+end display_usable_bounds

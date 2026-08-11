@@ -1,0 +1,100 @@
+module sh.sysl.sdl3
+@link("SDL3")
+
+import sysl.slices.as_ptr
+
+// Audio playback, on the queue model.
+//
+// **SDL runs its own audio thread and pulls from a stream's queue**, which is what opening a device
+// stream with a null callback selects. The program synthesises or decodes a finished buffer and
+// pushes it; nothing of this package is ever called from SDL's audio thread.
+//
+// **That is a deliberate choice and not a limitation of the binding.** SDL's other model hands the
+// device a callback it invokes on its own thread, and a sysl closure called from a thread sysl did
+// not start would be adjusting reference counts outside anything this package has established the
+// atomicity of. The queue model asks that question of nobody, costs a buffer's latency, and is what
+// every use short of a synthesiser wants. The mixer package is the answer for the rest.
+//
+// Opening several streams on the default device is fine and is how overlapping effects play at
+// once — SDL mixes them.
+
+// `SDL_AudioSpec` — three contiguous 32-bit words.
+struct AudioSpec
+    format: i32
+    channels: i32
+    freq: i32
+
+extern "SDL_OpenAudioDeviceStream" sdl_open_audio_device_stream(devid: u32, spec: *AudioSpec,
+                                                                callback: *u8, userdata: *u8) -> *u8
+extern "SDL_ResumeAudioStreamDevice" sdl_resume_audio_stream_device(stream: *u8) -> bool
+extern "SDL_PauseAudioStreamDevice" sdl_pause_audio_stream_device(stream: *u8) -> bool
+extern "SDL_PutAudioStreamData" sdl_put_audio_stream_data(stream: *u8, buf: *u8, len: i32) -> bool
+extern "SDL_GetAudioStreamQueued" sdl_get_audio_stream_queued(stream: *u8) -> i32
+extern "SDL_ClearAudioStream" sdl_clear_audio_stream(stream: *u8) -> bool
+extern "SDL_GetAudioStreamGain" sdl_get_audio_stream_gain(stream: *u8) -> f32
+extern "SDL_SetAudioStreamGain" sdl_set_audio_stream_gain(stream: *u8, gain: f32) -> bool
+extern "SDL_DestroyAudioStream" sdl_destroy_audio_stream(stream: *u8)
+extern "SDL_FlushAudioStream" sdl_flush_audio_stream(stream: *u8) -> bool
+
+// A playback voice: samples go in, the device takes them out.
+struct AudioStream
+    handle: *u8
+
+    resume(self) -> bool = sdl_resume_audio_stream_device(self.handle)
+
+    pause(self) -> bool = sdl_pause_audio_stream_device(self.handle)
+
+    // Queue float samples, each in [-1, 1]. **SDL copies them synchronously**, so the slice may be
+    // reused or dropped the moment this returns — which is why there is no staging buffer here.
+    put(self, samples: []f32) -> bool
+        if samples.len == 0 then return true
+
+        sdl_put_audio_stream_data(self.handle, ptr_cast(as_ptr(samples)), i32(samples.len * 4))
+    end put
+
+    // Queue bytes already in the stream's own sample format — a decoder's buffer handed through
+    // with no intermediate array.
+    put_bytes(self, bytes: []u8) -> bool
+        if bytes.len == 0 then return true
+
+        sdl_put_audio_stream_data(self.handle, as_ptr(bytes), i32(bytes.len))
+    end put_bytes
+
+    // Bytes still queued and not yet taken by the device. Zero means the voice is idle, which is
+    // how a player picks a free stream rather than cutting off a sound still playing.
+    queued(self) -> i32 = sdl_get_audio_stream_queued(self.handle)
+
+    // Hand over whatever partial sample frame is buffered, so the tail of a sound is not held back
+    // waiting for more. For the end of a clip, not for every push.
+    flush(self) -> bool = sdl_flush_audio_stream(self.handle)
+
+    clear(self) -> bool = sdl_clear_audio_stream(self.handle)
+
+    // Playback gain: 1.0 leaves the samples alone, 0.0 is silence, above 1.0 amplifies and may
+    // clip. SDL applies it as it feeds the device, so a volume control costs nothing per sample.
+    gain(self) -> f32 = sdl_get_audio_stream_gain(self.handle)
+
+    set_gain(self, g: f32) -> bool = sdl_set_audio_stream_gain(self.handle, g)
+
+    destroy(self) = sdl_destroy_audio_stream(self.handle)
+end AudioStream
+
+// Bring up the audio subsystem. Independent of video, so a program may open its window first and
+// decide about sound afterwards.
+init_audio() -> bool = init_subsystem(INIT_AUDIO)
+
+quit_audio() = quit_subsystem(INIT_AUDIO)
+
+// Open a playback stream on the default device and start it. `format` is one of the `AUDIO_*`
+// values; the default is float samples, which is the natural shape for anything synthesised.
+open_audio_stream(freq: i32, channels: i32 = 1, format: i32 = AUDIO_F32) -> Option[AudioStream]
+    var spec = AudioSpec(format, channels, freq)
+    val s = sdl_open_audio_device_stream(AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, null, null)
+
+    if s == null then return None
+
+    val stream = AudioStream(s)
+
+    stream.resume()
+    Some(stream)
+end open_audio_stream

@@ -1,0 +1,137 @@
+module sh.sysl.sdl3
+@link("SDL3")
+
+import sysl.text.{cstring, from_cstring}
+
+// SDL3 — a window, a renderer, an event queue, input and audio.
+//
+// **This package binds a library the machine already has, and carries no C of its own.** Unlike
+// linenoise, monocypher or qcbor, whose sources are vendored so that nothing has to be installed,
+// SDL is a large C project with its own build system and its own platform backends; a package
+// carrying it would be maintaining a port. So SDL3 is installed separately and the two flags naming
+// its prefix are part of every build here — `package.hocon` says why that is deliberate.
+//
+// **There is no shim either, which is the interesting half.** `regex` needed one because three
+// things in `<regex.h>` are reachable from C and from nothing else: a struct whose size only the
+// header knows, a `#define`, and a layout that had to be copied out. SDL3 has none of those
+// problems in the surface bound here:
+//
+//   - **Every handle is an opaque pointer** that SDL allocates and SDL frees, so this side never
+//     needs to know a size. `SDL_Window`, `SDL_Renderer`, `SDL_Texture`, `SDL_Cursor` and
+//     `SDL_AudioStream` are all `*u8` behind a one-field struct.
+//   - **`SDL_Surface` is public and ABI-stable in SDL3**, so its fields are read directly as a
+//     `*Surface` rather than copied out by C. That is a change from SDL2, where it was opaque.
+//   - **The constants are `#define`s with no symbol**, so they are transcribed — and that is the one
+//     hand-copied thing in the package. `tests.sysl` pins the values that would be silently wrong
+//     against what C computes, the way `rp2350` checks addresses against the datasheet.
+//   - **`SDL_Color` crosses by value**, which sysl does correctly. The Scala binding to the same
+//     library packs it into a `uint32` by hand because Scala Native mis-marshals a small by-value
+//     struct; nothing of the sort is needed here, and `tests.sysl` proves it by reading back a
+//     rendered pixel.
+//
+// **A call that fails answers `false` or a null handle, and the reason is in `error()`.** That is
+// SDL's convention and it is kept rather than translated into `Result`: a binding that invented a
+// richer answer than the library gives would be inventing the failure cases too.
+
+// ---- lifecycle ----
+
+extern "SDL_Init" sdl_init(flags: u32) -> bool
+extern "SDL_InitSubSystem" sdl_init_subsystem(flags: u32) -> bool
+extern "SDL_QuitSubSystem" sdl_quit_subsystem(flags: u32)
+extern "SDL_Quit" sdl_quit()
+extern "SDL_SetMainReady" sdl_set_main_ready()
+extern "SDL_GetError" sdl_get_error() -> *u8
+extern "SDL_Delay" sdl_delay(ms: u32)
+extern "SDL_SetHint" sdl_set_hint(name: *u8, value: *u8) -> bool
+extern "SDL_ResetHint" sdl_reset_hint(name: *u8) -> bool
+extern "SDL_IsMainThread" sdl_is_main_thread() -> bool
+extern "SDL_free" sdl_free(mem: *u8)
+
+// Tell SDL the program supplies its own `main`, which a sysl program always does — there is no
+// place for SDL's main shim to sit. Call it before `init`.
+set_main_ready() = sdl_set_main_ready()
+
+// Bring up the named subsystems; `false` on failure, with the reason in `error`.
+init(flags: u32 = INIT_VIDEO) -> bool = sdl_init(flags)
+
+// Bring up a subsystem after `init` has already run — audio is independent of video, so a program
+// that opens a window first and decides about sound later asks for it here.
+init_subsystem(flags: u32) -> bool = sdl_init_subsystem(flags)
+
+quit_subsystem(flags: u32) = sdl_quit_subsystem(flags)
+
+quit() = sdl_quit()
+
+// What went wrong with the last call that said so. SDL owns the storage and reuses it, so the text
+// is copied out here rather than pointed at.
+error() -> string = from_cstring(sdl_get_error()).unwrap_or("")
+
+// Sleep for at least this many milliseconds. The floor is the platform's timer granularity, so a
+// frame loop that wants a rate should measure rather than count delays.
+delay(ms: u32) = sdl_delay(ms)
+
+// Set a configuration hint. Most are read when the thing they configure is created, so a hint set
+// after the window exists may do nothing.
+set_hint(name: string, value: string) -> bool
+    val n = cstring(name)
+    val v = cstring(value)
+
+    sdl_set_hint(n.ptr, v.ptr)
+
+// Return a hint to its default, as though `set_hint` had never been called for it. Not the same as
+// setting it to `""`, which is a value like any other.
+reset_hint(name: string) -> bool
+    val n = cstring(name)
+
+    sdl_reset_hint(n.ptr)
+
+// Whether the caller is on the thread SDL was initialised on — the only one that may create a
+// window, touch a renderer, or pump events. Worth asserting at the head of anything a worker thread
+// has to hand off rather than do itself.
+is_main_thread() -> bool = sdl_is_main_thread()
+
+// ---- colour ----
+
+// An RGBA colour, one byte per channel.
+//
+// This is `SDL_Color`, laid out to agree with C's, and it crosses **by value** — which is what the
+// text binding's render calls take. `tests.sysl` checks both the size and that the channels arrive
+// in the right order after a round trip through a real render.
+struct Color
+    r: u8
+    g: u8
+    b: u8
+    a: u8
+
+    // Each channel as a fraction of full scale, which is what `SDL_FColor` and therefore every
+    // vertex wants.
+    rf -> f32 = f32(self.r) / 255.0
+    gf -> f32 = f32(self.g) / 255.0
+    bf -> f32 = f32(self.b) / 255.0
+    af -> f32 = f32(self.a) / 255.0
+end Color
+
+// An opaque colour.
+rgb(r: u8, g: u8, b: u8) -> Color = Color(r, g, b, 255)
+
+// A colour with an alpha channel.
+rgba(r: u8, g: u8, b: u8, a: u8) -> Color = Color(r, g, b, a)
+
+// An opaque colour from a packed `0xRRGGBB`, which is how a colour is usually written down.
+color_from_rgb(v: u32) -> Color = Color(u8((v >> 16) & 0xff), u8((v >> 8) & 0xff), u8(v & 0xff), 255)
+
+// Linear interpolation from `a` at `t = 0` to `b` at `t = 1`, clamped outside that — what a fade or
+// a trail blending toward the background is written with.
+blend(a: Color, b: Color, t: f64) -> Color
+    val u = if t < 0.0 then 0.0 else if t > 1.0 then 1.0 else t
+
+    Color(
+        u8(f64(a.r) + (f64(b.r) - f64(a.r)) * u),
+        u8(f64(a.g) + (f64(b.g) - f64(a.g)) * u),
+        u8(f64(a.b) + (f64(b.b) - f64(a.b)) * u),
+        u8(f64(a.a) + (f64(b.a) - f64(a.a)) * u),
+    )
+end blend
+
+val BLACK: Color = Color(0, 0, 0, 255)
+val WHITE: Color = Color(255, 255, 255, 255)

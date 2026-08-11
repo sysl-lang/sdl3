@@ -1,0 +1,197 @@
+module sh.sysl.sdl3
+@link("SDL3")
+
+import sysl.text.cstring
+
+// Textures, surfaces, and the property bag a few calls take their settings in.
+
+extern "SDL_CreateTexture" sdl_create_texture(renderer: *u8, format: u32, access: i32, w: i32, h: i32) -> *u8
+extern "SDL_CreateTextureFromSurface" sdl_create_texture_from_surface(renderer: *u8, surface: *u8) -> *u8
+extern "SDL_CreateTextureWithProperties" sdl_create_texture_with_properties(renderer: *u8, props: u32) -> *u8
+extern "SDL_UpdateTexture" sdl_update_texture(texture: *u8, rect: *Rect, pixels: *u8, pitch: i32) -> bool
+extern "SDL_DestroyTexture" sdl_destroy_texture(texture: *u8)
+extern "SDL_SetTextureScaleMode" sdl_set_texture_scale_mode(texture: *u8, mode: i32) -> bool
+extern "SDL_SetTextureBlendMode" sdl_set_texture_blend_mode(texture: *u8, mode: u32) -> bool
+extern "SDL_SetTextureAlphaMod" sdl_set_texture_alpha_mod(texture: *u8, alpha: u8) -> bool
+extern "SDL_SetTextureColorMod" sdl_set_texture_color_mod(texture: *u8, r: u8, g: u8, b: u8) -> bool
+extern "SDL_GetTextureSize" sdl_get_texture_size(texture: *u8, w: *f32, h: *f32) -> bool
+extern "SDL_UpdateYUVTexture" sdl_update_yuv_texture(texture: *u8, rect: *Rect,
+                                                     y: *u8, y_pitch: i32,
+                                                     u: *u8, u_pitch: i32,
+                                                     v: *u8, v_pitch: i32) -> bool
+extern "SDL_UpdateNVTexture" sdl_update_nv_texture(texture: *u8, rect: *Rect,
+                                                   y: *u8, y_pitch: i32,
+                                                   uv: *u8, uv_pitch: i32) -> bool
+
+extern "SDL_DestroySurface" sdl_destroy_surface(surface: *u8)
+extern "SDL_CreateSurface" sdl_create_surface(w: i32, h: i32, format: u32) -> *u8
+extern "SDL_ReadSurfacePixel" sdl_read_surface_pixel(surface: *u8, x: i32, y: i32,
+                                                     r: *u8, g: *u8, b: *u8, a: *u8) -> bool
+
+extern "SDL_CreateProperties" sdl_create_properties() -> u32
+extern "SDL_DestroyProperties" sdl_destroy_properties(props: u32)
+extern "SDL_SetNumberProperty" sdl_set_number_property(props: u32, name: *u8, value: i64) -> bool
+extern "SDL_SetStringProperty" sdl_set_string_property(props: u32, name: *u8, value: *u8) -> bool
+extern "SDL_SetPointerProperty" sdl_set_pointer_property(props: u32, name: *u8, value: *u8) -> bool
+extern "SDL_SetBooleanProperty" sdl_set_boolean_property(props: u32, name: *u8, value: bool) -> bool
+
+// ---- properties ----
+//
+// A typed key/value bag. It is here because two things in SDL can only be said at creation and have
+// no parameter for it: a texture's colorspace, and everything a file dialog is configured with.
+
+create_properties() -> u32 = sdl_create_properties()
+
+destroy_properties(props: u32) = sdl_destroy_properties(props)
+
+set_number_property(props: u32, name: string, value: i64) -> bool
+    val n = cstring(name)
+
+    sdl_set_number_property(props, n.ptr, value)
+end set_number_property
+
+// SDL copies a string property's value, so the source may go as soon as this returns.
+set_string_property(props: u32, name: string, value: string) -> bool
+    val n = cstring(name)
+    val v = cstring(value)
+
+    sdl_set_string_property(props, n.ptr, v.ptr)
+end set_string_property
+
+// A pointer property is stored as it stands and is **not** copied, so whatever it points at has to
+// outlive everything that reads the bag.
+set_pointer_property(props: u32, name: string, value: *u8) -> bool
+    val n = cstring(name)
+
+    sdl_set_pointer_property(props, n.ptr, value)
+end set_pointer_property
+
+set_boolean_property(props: u32, name: string, value: bool) -> bool
+    val n = cstring(name)
+
+    sdl_set_boolean_property(props, n.ptr, value)
+end set_boolean_property
+
+// ---- surfaces ----
+
+// The public part of `SDL_Surface`.
+//
+// **SDL3 made this struct public and ABI-stable**, which is why there is no shim in this package
+// for it — the fields are read straight out of SDL's own storage. It was opaque in SDL2, and the
+// Scala binding to this library still treats it as a bare pointer with two hand-written offsets.
+//
+// `flags` is a `Uint32` and getting that wrong shifts every field after it, which shows up as a
+// pitch narrower than the width rather than as anything that mentions layout. `tests.sysl` checks
+// the size against C's.
+struct SurfaceRec
+    flags: u32
+    format: i32
+    w: i32
+    h: i32
+    pitch: i32
+    pixels: *u8
+    refcount: i32
+    reserved: *u8
+
+// A CPU-side pixel buffer — what the text binding renders into and the image binding decodes into,
+// and what `Renderer.create_texture_from_surface` uploads to the GPU.
+struct Surface
+    handle: *u8
+
+    rec(self) -> *SurfaceRec = ptr_cast(self.handle)
+
+    width(self) -> i32 = self.rec().w
+
+    height(self) -> i32 = self.rec().h
+
+    // Bytes per row, which is not `width * bytes_per_pixel`: a surface's rows are padded for
+    // alignment, so anything walking the pixels steps by this.
+    pitch(self) -> i32 = self.rec().pitch
+
+    pixels(self) -> *u8 = self.rec().pixels
+
+    // One pixel's channels, with whatever conversion the surface's format needs. Slow per pixel —
+    // it is for a test or a colour picker, not for a scan.
+    read_pixel(self, x: i32, y: i32) -> Option[Color]
+        var r: u8 = 0
+        var g: u8 = 0
+        var b: u8 = 0
+        var a: u8 = 0
+
+        if sdl_read_surface_pixel(self.handle, x, y, &r, &g, &b, &a) then
+            Some(Color(r, g, b, a))
+        else
+            None
+    end read_pixel
+
+    destroy(self) = sdl_destroy_surface(self.handle)
+end Surface
+
+// An empty surface of a given size and pixel format.
+create_surface(w: i32, h: i32, format: u32) -> Option[Surface]
+    val s = sdl_create_surface(w, h, format)
+
+    if s == null then None else Some(Surface(s))
+end create_surface
+
+// ---- textures ----
+
+// A GPU-side image, made from a renderer.
+struct Texture
+    handle: *u8
+
+    set_scale_mode(self, mode: i32) -> bool = sdl_set_texture_scale_mode(self.handle, mode)
+
+    // How this texture's pixels combine with what is already in the target. A texture starts at
+    // `BLENDMODE_NONE`, which *replaces* rather than composites — a UI layer drawn over content
+    // beneath it has to be set to `BLENDMODE_BLEND` for its alpha to mean anything.
+    set_blend_mode(self, mode: u32) -> bool = sdl_set_texture_blend_mode(self.handle, mode)
+
+    // Scale the whole texture's alpha as it is drawn — what a fade is written with.
+    set_alpha_mod(self, alpha: u8) -> bool = sdl_set_texture_alpha_mod(self.handle, alpha)
+
+    // Tint: each channel is multiplied by this as the texture is drawn.
+    set_color_mod(self, r: u8, g: u8, b: u8) -> bool = sdl_set_texture_color_mod(self.handle, r, g, b)
+
+    // `(width, height)` in pixels. SDL answers in floats; a texture's size is whole pixels, so this
+    // narrows.
+    size(self) -> (f32, f32)
+        var w: f32 = 0.0
+        var h: f32 = 0.0
+
+        sdl_get_texture_size(self.handle, &w, &h)
+        (w, h)
+    end size
+
+    // Replace the whole of a streaming texture from a CPU buffer. `pitch` is bytes per row of the
+    // source — a Cairo image surface's stride, say — and the source's pixel layout has to match the
+    // texture's format.
+    update(self, pixels: *u8, pitch: i32) -> bool =
+        sdl_update_texture(self.handle, null, pixels, pitch)
+
+    // Replace a rectangle of it.
+    update_rect(self, r: Rect, pixels: *u8, pitch: i32) -> bool
+        var c = r
+
+        sdl_update_texture(self.handle, &c, pixels, pitch)
+    end update_rect
+
+    // Replace the whole of a three-plane YUV texture — an `PIXELFORMAT_IYUV` or `PIXELFORMAT_YV12`
+    // one. Each plane is its first byte and a pitch in **bytes per row**, which is the decoder's
+    // stride and not necessarily the frame width, since planes are commonly padded. The chroma
+    // planes are half size on both axes.
+    //
+    // Pass them Y, U, V whatever the texture's format: SDL swaps them itself for YV12. From
+    // libavcodec, `data(0)/linesize(0)` is Y, `1` is U and `2` is V.
+    update_yuv(self, y: *u8, y_pitch: i32, u: *u8, u_pitch: i32, v: *u8, v_pitch: i32) -> bool =
+        sdl_update_yuv_texture(self.handle, null, y, y_pitch, u, u_pitch, v, v_pitch)
+
+    // Replace the whole of a two-plane texture — `PIXELFORMAT_NV12` or `PIXELFORMAT_NV21`, the
+    // layout hardware decoders produce, whose two chroma channels share one interleaved plane.
+    // `uv_pitch` counts bytes per row of that plane, so for 4:2:0 it spans `width / 2` U/V *pairs*
+    // and is typically the same number as `y_pitch`.
+    update_nv(self, y: *u8, y_pitch: i32, uv: *u8, uv_pitch: i32) -> bool =
+        sdl_update_nv_texture(self.handle, null, y, y_pitch, uv, uv_pitch)
+
+    destroy(self) = sdl_destroy_texture(self.handle)
+end Texture

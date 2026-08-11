@@ -1,0 +1,202 @@
+module sh.sysl.sdl3
+@link("SDL3")
+
+import sysl.text.{CString, cstring, from_cstring}
+import sysl.slices.as_ptr
+import sysl.buf.{Buf, buf}
+
+// The system's own file chooser — a real Finder or Explorer panel, not something the program draws.
+//
+// **Threading.** SDL documents that the callback "may be called from a different thread", and on
+// macOS it never is: the Cocoa backend either runs the panel as a sheet on the parent window, whose
+// completion handler the main run loop invokes while events are pumped, or — with no parent window
+// — calls `runModal`, which blocks and calls back before the call even returns. Both are the main
+// thread, exactly as an event watch is. The same holds for Linux's XDG-portal backend. Linux's
+// zenity fallback is the exception: it calls back on a worker thread SDL made, which nothing in
+// this package has established the reference counting is safe across. **Pass a window on Linux, or
+// set `HINT_FILE_DIALOG_DRIVER` to "portal".**
+//
+// Note what that `runModal` path means: **without a window the call blocks** until the user is
+// done, so a program drawing its own frames stops drawing them. Pass the window.
+//
+// **A dialog's callback and its filter list have to outlive the call that starts it**, since SDL
+// holds the filters by pointer and reads them when the panel opens. Both live in module storage
+// under a slot number that SDL carries back as its opaque `userdata`, and the trampoline frees the
+// slot as it runs. That is the same shape the event watches use and the same shape the Scala
+// binding to this library uses, for the same reason: a `*extern` cannot capture.
+
+// What the user did. Cancelling is a normal outcome and a distinct one from failing — SDL reports
+// them differently and so does this.
+enum DialogResult
+    // One or more chosen paths, never empty. A save dialog's path need not exist yet, and on every
+    // platform the file may have been moved or replaced since the panel closed.
+    Chosen(paths: Buf[string])
+
+    // The user dismissed the panel without choosing.
+    Cancelled
+
+    // The dialog could not be shown, or failed while up. The text is SDL's.
+    Failed(message: string)
+
+// One entry in a dialog's filter list. `name` is what the user reads — "Video files"; `pattern` is
+// a semicolon-separated extension list — "mp4;mov;mkv" — with no dots and no globs, or the single
+// string `"*"` meaning everything.
+//
+// **Filters are advisory.** Not every platform honours them, and those that do may still let the
+// user defeat them, so never treat a returned path as matching.
+struct FileFilter
+    name: string
+    pattern: string
+
+// `SDL_DialogFileFilter` — two pointers, which is what SDL reads the array as.
+struct CFilter
+    name: *u8
+    pattern: *u8
+
+extern "SDL_ShowFileDialogWithProperties" sdl_show_file_dialog(kind: i32,
+                                                               callback: *extern(*u8, **u8, i32) -> unit,
+                                                               userdata: *u8, props: u32)
+
+// One dialog that is up. Everything here exists to outlive `show_file_dialog`.
+struct Pending
+    slot: i32
+    callback: &Fn(DialogResult) -> unit
+    filters: []CFilter
+    strings: Buf[CString]
+
+// The words SDL is handed as `userdata`. They are module storage, so their addresses are stable for
+// the life of the program — which is what lets a slot number cross into C and come back without
+// anything being allocated for it.
+private var slot_words: [16]i32 = [0; 16]
+private var slot_taken: [16]bool = [false; 16]
+private var pending: Buf[Pending] = buf()
+
+private var no_filters: []CFilter = [CFilter(null, null); 0]
+
+// The one function pointer SDL ever holds for a dialog.
+//
+// `files` is null when the dialog itself failed, a pointer to null when the user cancelled, and
+// otherwise a null-terminated array of UTF-8 paths. SDL frees the array as soon as this returns, so
+// every path is copied out first.
+dialog_trampoline(ud: *u8, files: **u8, filter: i32)
+    val w: *i32 = ptr_cast(ud)
+    val slot = w[0]
+
+    var found = -1
+    var i: usize = 0
+
+    while i < pending.len()
+        if pending[i].slot == slot
+            found = int(i)
+            break
+
+        i += 1
+
+    if found < 0 then return
+
+    val d = pending[usize(found)]
+
+    pending.remove(usize(found))
+    slot_taken[usize(slot)] = false
+
+    if files == null
+        d.callback(Failed(error()))
+        return
+
+    var paths: Buf[string] = buf()
+    var k: usize = 0
+
+    while files[k] != null
+        paths.push(from_cstring(files[k]).unwrap_or(""))
+        k += 1
+
+    if paths.len() == 0 then d.callback(Cancelled) else d.callback(Chosen(paths))
+end dialog_trampoline
+
+private take_slot() -> i32
+    for i in 0..<16usize
+        if !slot_taken[i]
+            slot_taken[i] = true
+            slot_words[i] = i32(i)
+            return i32(i)
+
+    -1
+end take_slot
+
+// Show a system file dialog and deliver the outcome to `callback`.
+//
+// `kind` is one of `FILEDIALOG_OPENFILE`, `FILEDIALOG_SAVEFILE` or `FILEDIALOG_OPENFOLDER`; the
+// three wrappers below name them. Everything after `window` is a hint a platform may ignore:
+// `location` is a directory if it ends in a separator and otherwise a directory plus a pre-filled
+// name, and `title`, `accept` and `cancel` are the panel's labels.
+//
+// The callback runs once and is then forgotten. Up to sixteen dialogs may be up at a time; `false`
+// means there was no slot left, and the callback will not run.
+show_file_dialog(kind: i32, callback: &Fn(DialogResult) -> unit, window: Option[Window] = None,
+                 filters: []FileFilter = [], location: string = "", many: bool = false,
+                 title: string = "", accept: string = "", cancel: string = "") -> bool
+    val slot = take_slot()
+
+    if slot < 0 then return false
+
+    // The filter strings are held as `CString`s for as long as the dialog is, because SDL does
+    // **not** copy the array — it keeps the pointer and reads it when the panel opens.
+    var strings: Buf[CString] = buf()
+    var cfilters: []CFilter = if filters.len == 0 then no_filters else [CFilter(null, null); filters.len]
+
+    for i in 0..<filters.len
+        val n = cstring(filters[i].name)
+        val p = cstring(filters[i].pattern)
+
+        cfilters[i] = CFilter(n.ptr, p.ptr)
+        strings.push(n)
+        strings.push(p)
+
+    pending.push(Pending(slot, callback, cfilters, strings))
+
+    val props = create_properties()
+
+    if filters.len > 0
+        set_pointer_property(props, "SDL.filedialog.filters", ptr_cast(as_ptr(cfilters)))
+        set_number_property(props, "SDL.filedialog.nfilters", i64(filters.len))
+
+    window match
+        Some(w) -> set_pointer_property(props, "SDL.filedialog.window", w.handle)
+        None -> ()
+
+    if location != "" then set_string_property(props, "SDL.filedialog.location", location)
+    if many then set_boolean_property(props, "SDL.filedialog.many", true)
+    if title != "" then set_string_property(props, "SDL.filedialog.title", title)
+    if accept != "" then set_string_property(props, "SDL.filedialog.accept", accept)
+    if cancel != "" then set_string_property(props, "SDL.filedialog.cancel", cancel)
+
+    sdl_show_file_dialog(kind, &dialog_trampoline, ptr_cast(&slot_words[usize(slot)]), props)
+
+    // The properties are read synchronously — SDL's own convenience wrappers destroy the set the
+    // moment this returns — so the bag goes here while the filters array it points at does not.
+    destroy_properties(props)
+    true
+end show_file_dialog
+
+// Ask the user to pick an existing file, or several with `many`.
+show_open_file_dialog(callback: &Fn(DialogResult) -> unit, window: Option[Window] = None,
+                      filters: []FileFilter = [], location: string = "", many: bool = false,
+                      title: string = "", accept: string = "", cancel: string = "") -> bool =
+    show_file_dialog(FILEDIALOG_OPENFILE, callback, window, filters, location, many, title, accept, cancel)
+
+// Ask the user to name a file to write. The path need not exist, and the panel does the "already
+// exists — overwrite?" prompt itself.
+show_save_file_dialog(callback: &Fn(DialogResult) -> unit, window: Option[Window] = None,
+                      filters: []FileFilter = [], location: string = "",
+                      title: string = "", accept: string = "", cancel: string = "") -> bool =
+    show_file_dialog(FILEDIALOG_SAVEFILE, callback, window, filters, location, false, title, accept, cancel)
+
+// Ask the user to pick a folder. Filters do not apply.
+show_open_folder_dialog(callback: &Fn(DialogResult) -> unit, window: Option[Window] = None,
+                        location: string = "", many: bool = false,
+                        title: string = "", accept: string = "", cancel: string = "") -> bool =
+    show_file_dialog(FILEDIALOG_OPENFOLDER, callback, window, [], location, many, title, accept, cancel)
+
+// How many dialogs are up. Zero after every callback has run, which is the "nothing was stranded"
+// invariant `tests.sysl` checks.
+dialogs_pending() -> usize = pending.len()

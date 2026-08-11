@@ -1,0 +1,212 @@
+module sh.sysl.sdl3
+
+// The constants, transcribed from SDL3's headers.
+//
+// **These are the one hand-copied thing in the package, and that is not avoidable.** Every value
+// here is a `#define` or an enumeration constant, so there is no symbol for a linker to resolve and
+// nothing for `extern` to name — `15 §7` lists a macro as one of the three things reachable from C
+// and from nothing else. The alternative is a shim exporting each one as a function, which trades a
+// transcription risk for a per-constant call and a much larger C file.
+//
+// **What makes that safe is `tests.sysl`**, which pins the values whose being wrong would be quiet
+// rather than loud: a pixel format that decodes to the wrong colours, a colorspace that shifts
+// greens, an event type that simply never matches. Those are checked against what SDL itself
+// computes, so a value mistyped here fails a test rather than shipping.
+
+// ---- subsystems (SDL_INIT_*) ----
+
+const INIT_AUDIO: u32 = 0x00000010
+const INIT_VIDEO: u32 = 0x00000020
+const INIT_JOYSTICK: u32 = 0x00000200
+const INIT_HAPTIC: u32 = 0x00001000
+const INIT_GAMEPAD: u32 = 0x00002000
+const INIT_EVENTS: u32 = 0x00004000
+const INIT_SENSOR: u32 = 0x00008000
+const INIT_CAMERA: u32 = 0x00010000
+
+// ---- windows ----
+
+// There is no `SDL_WINDOW_SHOWN` in SDL3: a window is visible unless it is created `HIDDEN`. The
+// mask is 64 bits wide, unlike SDL2's.
+const WINDOW_FULLSCREEN: u64 = 0x0000000000000001
+const WINDOW_OPENGL: u64 = 0x0000000000000002
+const WINDOW_OCCLUDED: u64 = 0x0000000000000004
+const WINDOW_HIDDEN: u64 = 0x0000000000000008
+const WINDOW_BORDERLESS: u64 = 0x0000000000000010
+const WINDOW_RESIZABLE: u64 = 0x0000000000000020
+const WINDOW_MINIMIZED: u64 = 0x0000000000000040
+const WINDOW_MAXIMIZED: u64 = 0x0000000000000080
+const WINDOW_MOUSE_GRABBED: u64 = 0x0000000000000100
+const WINDOW_INPUT_FOCUS: u64 = 0x0000000000000200
+const WINDOW_MOUSE_FOCUS: u64 = 0x0000000000000400
+const WINDOW_HIGH_PIXEL_DENSITY: u64 = 0x0000000000002000
+const WINDOW_ALWAYS_ON_TOP: u64 = 0x0000000000008000
+const WINDOW_UTILITY: u64 = 0x0000000000020000
+const WINDOW_TRANSPARENT: u64 = 0x0000000040000000
+const WINDOW_NOT_FOCUSABLE: u64 = 0x0000000080000000
+
+// `SDL_WINDOWPOS_CENTERED` — the position that means "let the window server centre it".
+const WINDOWPOS_CENTERED: i32 = 0x2fff0000
+
+// `SDL_WINDOWPOS_UNDEFINED` — "put it wherever you like".
+const WINDOWPOS_UNDEFINED: i32 = 0x1fff0000
+
+// ---- textures ----
+
+const TEXTUREACCESS_STATIC: i32 = 0
+const TEXTUREACCESS_STREAMING: i32 = 1
+const TEXTUREACCESS_TARGET: i32 = 2
+
+const SCALEMODE_NEAREST: i32 = 0
+const SCALEMODE_LINEAR: i32 = 1
+const SCALEMODE_PIXELART: i32 = 2
+
+// ---- pixel formats ----
+
+// 32-bit packed ARGB, eight bits per channel. On a little-endian host the bytes lie B, G, R, A —
+// byte for byte what a Cairo `ARGB32` image surface holds — so such a buffer uploads straight into
+// a streaming texture of this format. The value is SDL's `SDL_DEFINE_PIXELFORMAT` encoding for
+// PACKED32 / ARGB / 8888 / 32-bit.
+const PIXELFORMAT_ARGB8888: u32 = 0x16362004
+const PIXELFORMAT_RGBA8888: u32 = 0x16462004
+const PIXELFORMAT_ABGR8888: u32 = 0x16762004
+const PIXELFORMAT_RGB24: u32 = 0x17101803
+
+// The planar formats a video decoder actually produces. A texture in one of these takes the
+// decoder's planes directly and the renderer converts to RGB in the blit's shader — so there is no
+// colour conversion on the frame path and the scale to the destination rectangle is free. Each
+// value is SDL's `SDL_DEFINE_PIXELFOURCC`, the four ASCII bytes packed little-endian.
+//
+// Chroma is half resolution on both axes in all of them (4:2:0), so the U and V planes are
+// `(width / 2) x (height / 2)`.
+
+// Planar Y + U + V, three planes — libavcodec's `AV_PIX_FMT_YUV420P`, the usual output of an
+// H.264/HEVC decode, and what `Texture.update_yuv` expects.
+const PIXELFORMAT_IYUV: u32 = 0x56555949
+
+// Planar Y + V + U — IYUV with the chroma planes swapped.
+const PIXELFORMAT_YV12: u32 = 0x32315659
+
+// Planar Y + interleaved U/V, two planes. What hardware decoders hand back; feed it with
+// `Texture.update_nv`.
+const PIXELFORMAT_NV12: u32 = 0x3231564e
+
+// Planar Y + interleaved V/U — NV12 with the chroma order swapped.
+const PIXELFORMAT_NV21: u32 = 0x3132564e
+
+// ---- colorspaces ----
+
+// Only meaningful for a YUV texture, and settable only at creation through
+// `Renderer.create_yuv_texture`. SDL defaults such a texture to BT.601 limited, so HD footage
+// created without an explicit colorspace decodes to visibly wrong colour — greens and reds shifted
+// — which is a quiet wrong answer rather than an error. Match what the file declares.
+
+// BT.709, limited (studio) range — the colorspace of essentially all HD video.
+const COLORSPACE_BT709_LIMITED: u32 = 0x21100421
+
+// BT.601, limited range — SD video, and SDL's default for YUV when nothing says.
+const COLORSPACE_BT601_LIMITED: u32 = 0x211018c6
+
+// Full-range YUV, as produced by JPEG and by some camera and screen-capture sources.
+const COLORSPACE_JPEG: u32 = 0x220004c6
+
+// ---- blend modes ----
+
+const BLENDMODE_NONE: u32 = 0x00000000
+const BLENDMODE_BLEND: u32 = 0x00000001
+const BLENDMODE_ADD: u32 = 0x00000002
+const BLENDMODE_MOD: u32 = 0x00000004
+const BLENDMODE_MUL: u32 = 0x00000008
+
+// ---- events (SDL_EVENT_*) ----
+
+const EVENT_QUIT: u32 = 0x100
+
+// `WINDOW_RESIZED` fires when the logical size changes — a user drag, a programmatic resize.
+// `WINDOW_PIXEL_SIZE_CHANGED` fires when the backbuffer's pixel size does, which is the same moment
+// on a 1x display and is also when the window moves between displays of different density. A
+// renderer that owns a sized backbuffer rebuilds it on the second.
+const EVENT_WINDOW_SHOWN: u32 = 0x202
+const EVENT_WINDOW_HIDDEN: u32 = 0x203
+const EVENT_WINDOW_EXPOSED: u32 = 0x204
+const EVENT_WINDOW_MOVED: u32 = 0x205
+const EVENT_WINDOW_RESIZED: u32 = 0x206
+const EVENT_WINDOW_PIXEL_SIZE_CHANGED: u32 = 0x207
+const EVENT_WINDOW_MINIMIZED: u32 = 0x209
+const EVENT_WINDOW_MAXIMIZED: u32 = 0x20a
+const EVENT_WINDOW_RESTORED: u32 = 0x20b
+const EVENT_WINDOW_MOUSE_ENTER: u32 = 0x20c
+const EVENT_WINDOW_MOUSE_LEAVE: u32 = 0x20d
+const EVENT_WINDOW_FOCUS_GAINED: u32 = 0x20e
+const EVENT_WINDOW_FOCUS_LOST: u32 = 0x20f
+const EVENT_WINDOW_CLOSE_REQUESTED: u32 = 0x210
+
+const EVENT_KEY_DOWN: u32 = 0x300
+const EVENT_KEY_UP: u32 = 0x301
+const EVENT_TEXT_INPUT: u32 = 0x303
+const EVENT_TEXT_EDITING: u32 = 0x304
+
+const EVENT_MOUSE_MOTION: u32 = 0x400
+const EVENT_MOUSE_BUTTON_DOWN: u32 = 0x401
+const EVENT_MOUSE_BUTTON_UP: u32 = 0x402
+const EVENT_MOUSE_WHEEL: u32 = 0x403
+
+// Drag and drop from the desktop onto the window. A drag delivers a `BEGIN`, then one `DROP_FILE`
+// (or `DROP_TEXT`) per item, then `COMPLETE` — only the per-item events carry a payload. SDL3 owns
+// the string and frees it once the event is handled, so `Event.drop_data` copies it out.
+const EVENT_DROP_FILE: u32 = 0x1000
+const EVENT_DROP_TEXT: u32 = 0x1001
+const EVENT_DROP_BEGIN: u32 = 0x1002
+const EVENT_DROP_COMPLETE: u32 = 0x1003
+const EVENT_DROP_POSITION: u32 = 0x1004
+
+// The range a program's own pushed events live in. `SDL_EVENT_USER` is the first of them.
+const EVENT_USER: u32 = 0x8000
+
+// ---- mouse buttons ----
+
+const BUTTON_LEFT: u8 = 1
+const BUTTON_MIDDLE: u8 = 2
+const BUTTON_RIGHT: u8 = 3
+const BUTTON_X1: u8 = 4
+const BUTTON_X2: u8 = 5
+
+// The masks `mouse_state` answers with.
+const BUTTON_LMASK: u32 = 0x0001
+const BUTTON_MMASK: u32 = 0x0002
+const BUTTON_RMASK: u32 = 0x0004
+const BUTTON_X1MASK: u32 = 0x0008
+const BUTTON_X2MASK: u32 = 0x0010
+
+// ---- hints ----
+
+val HINT_RENDER_VSYNC: string = "SDL_RENDER_VSYNC"
+val HINT_RENDER_DRIVER: string = "SDL_RENDER_DRIVER"
+val HINT_VIDEO_DRIVER: string = "SDL_VIDEO_DRIVER"
+
+// Selects a file-dialog backend by name. Only Linux has more than one to choose between — "portal"
+// and "zenity"; every other platform has exactly one and **fails the dialog** if this is set to
+// anything at all. That makes it the way to exercise a dialog's whole path — filters, properties,
+// callback — with no panel appearing, which is what `tests.sysl` uses it for.
+val HINT_FILE_DIALOG_DRIVER: string = "SDL_FILE_DIALOG_DRIVER"
+
+// ---- audio ----
+
+// `SDL_AUDIO_F32LE` — 32-bit little-endian float samples in [-1, 1], the natural format for
+// synthesised PCM.
+const AUDIO_F32: i32 = 0x8120
+
+// `SDL_AUDIO_S16LE` — signed 16-bit samples, what most files decode to.
+const AUDIO_S16: i32 = 0x8010
+
+// `SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK`, the id that selects the system's default output.
+const AUDIO_DEVICE_DEFAULT_PLAYBACK: u32 = 0xffffffff
+
+// `SDL_AUDIO_DEVICE_DEFAULT_RECORDING`.
+const AUDIO_DEVICE_DEFAULT_RECORDING: u32 = 0xfffffffe
+
+// ---- file dialogs ----
+
+const FILEDIALOG_OPENFILE: i32 = 0
+const FILEDIALOG_SAVEFILE: i32 = 1
+const FILEDIALOG_OPENFOLDER: i32 = 2

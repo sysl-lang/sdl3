@@ -1,0 +1,82 @@
+module sh.sysl.sdl3
+@link("SDL3")
+
+import sysl.text.{cstring, from_cstring}
+import sysl.buf.{Buf, buf}
+
+// The clipboard, and the locales the user prefers.
+//
+// **Both are cases of C handing back storage the caller must free**, which is the one memory shape
+// a binding has to get right. SDL allocates with its own allocator and supplies `SDL_free`, so the
+// text is copied into a sysl `string` and the buffer released before this side returns — nothing
+// leaves here pointing into storage SDL owns, and the caller never has a free to remember.
+
+extern "SDL_GetClipboardText" sdl_get_clipboard_text() -> *u8
+extern "SDL_SetClipboardText" sdl_set_clipboard_text(text: *u8) -> bool
+extern "SDL_HasClipboardText" sdl_has_clipboard_text() -> bool
+
+// `SDL_Locale` — two C strings, the second of which is null when the platform names no region.
+struct CLocale
+    language: *u8
+    country: *u8
+
+extern "SDL_GetPreferredLocales" sdl_get_preferred_locales(count: *i32) -> **CLocale
+
+// The clipboard's text, or `""` when it holds none. SDL never answers null here.
+clipboard_text() -> string
+    val p = sdl_get_clipboard_text()
+
+    if p == null then return ""
+
+    val s = from_cstring(p).unwrap_or("")
+
+    sdl_free(p)
+    s
+end clipboard_text
+
+// Replace the clipboard's text.
+set_clipboard_text(text: string) -> bool
+    val t = cstring(text)
+
+    sdl_set_clipboard_text(t.ptr)
+end set_clipboard_text
+
+// Whether the clipboard holds non-empty text.
+has_clipboard_text() -> bool = sdl_has_clipboard_text()
+
+// A language the user prefers, and the region they prefer it in. `country` is `""` where the
+// platform names no region — "fr" rather than "fr_CA" — which is a real answer and not a missing
+// one.
+struct Locale
+    language: string
+    country: string
+
+    // The two joined the way a locale is usually written: "en_GB", or just "en".
+    tag(self) -> string = if self.country == "" then self.language else self.language + "_" + self.country
+end Locale
+
+// The languages the user prefers, most-wanted first. Empty when the platform will not say.
+//
+// **The array is `SDL_Locale **`, not `char **`** — one pointer per locale, each to a struct of two
+// strings. SDL answers it as a single allocation holding the array, the structs and the text, so
+// the whole thing is freed once, after everything has been copied out.
+preferred_locales() -> Buf[Locale]
+    var out: Buf[Locale] = buf()
+    var n: i32 = 0
+    val arr = sdl_get_preferred_locales(&n)
+
+    if arr == null then return out
+
+    var i: usize = 0
+
+    while arr[i] != null
+        val l = arr[i]
+        val language = from_cstring(l.language).unwrap_or("")
+        val country = if l.country == null then "" else from_cstring(l.country).unwrap_or("")
+
+        out.push(Locale(language, country))
+        i += 1
+
+    sdl_free(ptr_cast(arr))
+    out
+end preferred_locales
