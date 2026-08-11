@@ -48,6 +48,7 @@ extern "SDL_SetRenderVSync" sdl_set_render_vsync(renderer: *u8, vsync: i32) -> b
 extern "SDL_GetRenderOutputSize" sdl_get_render_output_size(renderer: *u8, w: *i32, h: *i32) -> bool
 extern "SDL_SetRenderScale" sdl_set_render_scale(renderer: *u8, x: f32, y: f32) -> bool
 extern "SDL_SetRenderClipRect" sdl_set_render_clip_rect(renderer: *u8, rect: *Rect) -> bool
+extern "SDL_RenderReadPixels" sdl_render_read_pixels(renderer: *u8, rect: *Rect) -> *u8
 
 // An accelerated drawing surface. Made from a window with `Window.create_renderer`.
 struct Renderer
@@ -122,6 +123,30 @@ struct Renderer
     end fill_rect
 
     present(self) -> bool = sdl_render_present(self.handle)
+
+    // What is currently in the render target, as a new CPU surface the caller destroys. `None` if
+    // the read failed — on a backend that cannot read back, or for a rectangle outside the target.
+    //
+    // **Read before `present`, not after.** Presenting is allowed to leave the backbuffer
+    // undefined, so a screenshot taken afterwards is a bet on the driver. Draw, read, then present.
+    //
+    // It is also **slow by nature**: the call waits for the GPU to finish and pulls the pixels back
+    // across the bus, so it belongs in a screenshot key, a colour picker or a test, and not in a
+    // frame loop.
+    read_pixels(self) -> Option[Surface]
+        val s = sdl_render_read_pixels(self.handle, null)
+
+        if s == null then None else Some(Surface(s))
+    end read_pixels
+
+    // The same, for one rectangle of the target rather than the whole of it. The rectangle is in
+    // pixels — `output_size`'s units, which on a high-density display are not the window's.
+    read_pixels_rect(self, r: Rect) -> Option[Surface]
+        var c = r
+        val s = sdl_render_read_pixels(self.handle, &c)
+
+        if s == null then None else Some(Surface(s))
+    end read_pixels_rect
 
     // ---- textures ----
 

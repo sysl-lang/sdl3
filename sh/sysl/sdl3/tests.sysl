@@ -434,6 +434,49 @@ a_renderer_draws_a_frame()
     w.destroy()
     quit()
 
+// Reading the target back is the only way a test can see that a drawing call put the colour where
+// it said it would — everything above asserts that a call *succeeded*. So this one draws two known
+// colours and asks for them by coordinate.
+@test
+a_renderer_reads_its_pixels_back()
+    assert(headless(), "SDL_Init")
+
+    val w = create_window("readback", 64, 48, WINDOW_HIDDEN).expect("the window opened")
+    val r = w.create_renderer().expect("the renderer opened")
+
+    assert(r.clear_to(rgb(10, 20, 30)), "cleared to a background")
+    assert(r.set_draw_color(rgb(200, 100, 50)), "set a foreground")
+    assert(r.fill_rect(8.0, 8.0, 16.0, 16.0), "filled a rectangle")
+
+    val shot = r.read_pixels().expect("the target read back")
+
+    assert_eq(shot.width(), 64i32, "the surface is the target's width")
+    assert_eq(shot.height(), 48i32, "and its height")
+
+    val inside = shot.read_pixel(12, 12).expect("a pixel inside the rectangle")
+    val outside = shot.read_pixel(40, 40).expect("a pixel outside it")
+
+    assert_eq(inside.r, 200u8, "the rectangle's red")
+    assert_eq(inside.g, 100u8, "its green")
+    assert_eq(inside.b, 50u8, "its blue")
+    assert_eq(outside.r, 10u8, "the background's red")
+    assert_eq(outside.g, 20u8, "its green")
+    assert_eq(outside.b, 30u8, "its blue")
+
+    // A rectangle reads back only that rectangle, and its (0, 0) is the rectangle's corner rather
+    // than the target's — which is the whole of what the second form is for.
+    val part = r.read_pixels_rect(Rect(8, 8, 4, 4)).expect("part of the target read back")
+
+    assert_eq(part.width(), 4i32, "the part is the rectangle's width")
+    assert_eq(part.height(), 4i32, "and its height")
+    assert_eq(part.read_pixel(0, 0).expect("its corner").r, 200u8, "which starts at the rectangle")
+
+    part.destroy()
+    shot.destroy()
+    r.destroy()
+    w.destroy()
+    quit()
+
 @test
 a_renderer_draws_into_a_texture()
     assert(headless(), "SDL_Init")

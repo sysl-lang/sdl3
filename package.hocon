@@ -3,11 +3,11 @@
 // This is the block a consumer writes to reach this package:
 //
 //     dependencies {
-//       sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.1.0" }
+//       sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.1.1" }
 //     }
 //
 // The coordinate is identity rather than a URL, so it carries no `https://`, and the version is the
-// tag `v0.1.0` on this repository.
+// tag `v0.1.1` on this repository.
 //
 // **SDL3 has to be installed.** Nothing is vendored here: SDL is a large C project with its own
 // build system and its own platform backends, and a package that carried it would be carrying a
@@ -32,7 +32,7 @@
 
 package {
   name    = "sdl3"
-  version = "0.1.0"
+  version = "0.1.1"
 }
 
 // **`posix`, because SDL is a hosted library.** It opens devices, starts threads, talks to a window

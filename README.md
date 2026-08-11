@@ -5,7 +5,7 @@ clipboard, the system file dialog, and queued audio.
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.1.0" }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.1.1" }
 }
 ```
 
@@ -108,6 +108,23 @@ val t: &Tally = Tally(0)
 add_event_watch(e -> if e.kind == EVENT_QUIT then t.n += 1)
 ```
 
+## Reading the frame back
+
+`renderer.read_pixels()` answers what is in the target as a `Surface`, which is what a screenshot,
+a colour picker and a test that checks *where* a call drew are all written with. `read_pixels_rect`
+takes one rectangle instead, in the target's own pixels.
+
+**Read before `present`, not after** — presenting is allowed to leave the backbuffer undefined, so a
+shot taken afterwards is a bet on the driver. And it is slow by nature: it waits for the GPU and
+pulls the pixels back across the bus, so it belongs on a key rather than in a frame loop.
+
+```sysl
+val shot = renderer.read_pixels().expect("the frame")
+
+save_png(shot, "screenshot.png")        // sdl3-image
+shot.destroy()
+```
+
 ## Events
 
 `SDL_Event` is a union of about thirty structs in 128 bytes. It is read here as one struct holding
@@ -141,9 +158,9 @@ the answer for anything more.
 sysl test . --include-path /opt/homebrew/include --link-path /opt/homebrew/lib
 ```
 
-Thirty tests, run headless against a real SDL3 — the dummy video and audio drivers create windows,
-renderers, textures and devices and draw into memory, so nothing here needs a display or a sound
-card.
+Thirty-one tests, run headless against a real SDL3 — the dummy video and audio drivers create
+windows, renderers, textures and devices and draw into memory, so nothing here needs a display or a
+sound card.
 
 **Half of them exist to pin the transcribed constants.** Every `SDL_INIT_*`, window flag, pixel
 format, colorspace, scancode and event type is a `#define` with no symbol, so it was copied by hand
