@@ -1,11 +1,11 @@
 # sdl3
 
 SDL3 for sysl — a window, an accelerated renderer, the event queue, keyboard and mouse, the
-clipboard, the system file dialog, and queued audio.
+clipboard, the system file dialog, queued audio, and the monotonic clock a frame loop is paced by.
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.1.1" }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.1.2" }
 }
 ```
 
@@ -108,6 +108,23 @@ val t: &Tally = Tally(0)
 add_event_watch(e -> if e.kind == EVENT_QUIT then t.n += 1)
 ```
 
+## The clock
+
+`ticks()` and `ticks_ns()` count from `init`, and `performance_counter()`/`performance_frequency()`
+are the raw pair behind them. **This is the only clock a sysl program has** — the language has no
+time source of its own — so a frame loop measures its step with it:
+
+```sysl
+val now = ticks_ns()
+val dt = real(now - last) / 1e9        // seconds, for the physics
+last = now
+```
+
+It is **monotonic**: it counts forward from `init` and does not jump when somebody changes the
+system time, which is what makes it right for a frame time and useless for a date. `delay_precise`
+is the companion for pacing — it spins out the last of the interval rather than handing the whole of
+it to the scheduler, and costs a core while it waits.
+
 ## Reading the frame back
 
 `renderer.read_pixels()` answers what is in the target as a `Surface`, which is what a screenshot,
@@ -158,7 +175,7 @@ the answer for anything more.
 sysl test . --include-path /opt/homebrew/include --link-path /opt/homebrew/lib
 ```
 
-Thirty-one tests, run headless against a real SDL3 — the dummy video and audio drivers create
+Thirty-two tests, run headless against a real SDL3 — the dummy video and audio drivers create
 windows, renderers, textures and devices and draw into memory, so nothing here needs a display or a
 sound card.
 

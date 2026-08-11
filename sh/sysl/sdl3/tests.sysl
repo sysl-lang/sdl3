@@ -53,6 +53,41 @@ the_layouts_agree_with_c()
     assert_eq(sizeof(AudioSpec), 12usize, "SDL_AudioSpec is three 32-bit words")
     assert_eq(sizeof(CFilter), 16usize, "SDL_DialogFileFilter is two pointers")
 
+// ---- the clock ----
+
+// Nothing here asserts a duration to the millisecond — a test that did would fail on a loaded
+// machine, and would be measuring the scheduler rather than the binding. What it can assert is
+// that the clock moves at all, that all three readings move together, and that the millisecond and
+// nanosecond scales are one clock read twice rather than two clocks.
+@test
+the_clock_advances_and_its_scales_agree()
+    assert(init(0), "SDL_Init")
+
+    val hz = performance_frequency()
+
+    assert(hz > 0u64, "the performance counter has a frequency")
+
+    val ms0 = ticks()
+    val c0 = performance_counter()
+
+    delay(20)
+
+    val ms1 = ticks()
+    val ns1 = ticks_ns()
+    val c1 = performance_counter()
+
+    assert(ms1 >= ms0 + 15, "a twenty-millisecond delay moved the millisecond clock")
+    assert(c1 > c0, "and the performance counter")
+
+    // `ns1` was read after `ms1` and the clock is monotonic, so it cannot be behind — and if the
+    // two were different clocks they would not stay within a frame of each other.
+    val ms_from_ns = ns1 / 1000000
+
+    assert(ms_from_ns >= ms1, "the nanosecond clock is not behind the millisecond one")
+    assert(ms_from_ns - ms1 < 50, "and they are one clock rather than two")
+
+    quit()
+
 // Every variant view is the union's own size, which is what makes reinterpreting one into another
 // safe — a view that came out short would be reading a field past the end of the storage SDL
 // filled.

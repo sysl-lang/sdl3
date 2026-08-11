@@ -42,6 +42,12 @@ extern "SDL_Quit" sdl_quit()
 extern "SDL_SetMainReady" sdl_set_main_ready()
 extern "SDL_GetError" sdl_get_error() -> *u8
 extern "SDL_Delay" sdl_delay(ms: u32)
+extern "SDL_DelayNS" sdl_delay_ns(ns: u64)
+extern "SDL_DelayPrecise" sdl_delay_precise(ns: u64)
+extern "SDL_GetTicks" sdl_get_ticks() -> u64
+extern "SDL_GetTicksNS" sdl_get_ticks_ns() -> u64
+extern "SDL_GetPerformanceCounter" sdl_get_performance_counter() -> u64
+extern "SDL_GetPerformanceFrequency" sdl_get_performance_frequency() -> u64
 extern "SDL_SetHint" sdl_set_hint(name: *u8, value: *u8) -> bool
 extern "SDL_ResetHint" sdl_reset_hint(name: *u8) -> bool
 extern "SDL_IsMainThread" sdl_is_main_thread() -> bool
@@ -67,8 +73,39 @@ quit() = sdl_quit()
 error() -> string = from_cstring(sdl_get_error()).unwrap_or("")
 
 // Sleep for at least this many milliseconds. The floor is the platform's timer granularity, so a
-// frame loop that wants a rate should measure rather than count delays.
+// frame loop that wants a rate should measure rather than count delays — `ticks` below is what it
+// measures with.
 delay(ms: u32) = sdl_delay(ms)
+
+// The same in nanoseconds, and the same caveat: the sleep is *at least* this long.
+delay_ns(ns: u64) = sdl_delay_ns(ns)
+
+// A sleep that spins out the last of the interval rather than handing the whole of it to the
+// scheduler. Accurate to well under a millisecond and it costs a core while it waits, which is the
+// trade — it is for pacing a frame, not for idling.
+delay_precise(ns: u64) = sdl_delay_precise(ns)
+
+// ---- the clock ----
+//
+// **This is the only clock a sysl program has**, since the language itself has no time source, and
+// it is a monotonic one: it counts from `init` and cannot go backwards or jump when somebody
+// changes the system time. That makes it right for the two things a program asks a clock for here —
+// how long the last frame took, and how long since something happened — and useless for the date,
+// which SDL does not answer either.
+
+// Milliseconds since `init`.
+ticks() -> u64 = sdl_get_ticks()
+
+// The same in nanoseconds, which is what a frame time wants: at 120 Hz a frame is eight
+// milliseconds, so a millisecond clock measures it to one part in eight.
+ticks_ns() -> u64 = sdl_get_ticks_ns()
+
+// The raw counter behind both, and the ticks per second to divide it by. `ticks_ns` is this pair
+// already divided; reach for the counter itself only where the division would lose something —
+// timing a run of a few microseconds, or accumulating a total without rounding at every step.
+performance_counter() -> u64 = sdl_get_performance_counter()
+
+performance_frequency() -> u64 = sdl_get_performance_frequency()
 
 // Set a configuration hint. Most are read when the thing they configure is created, so a hint set
 // after the window exists may do nothing.
