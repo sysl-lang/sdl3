@@ -98,7 +98,10 @@ struct SurfaceRec
 struct Surface
     handle: *u8
 
-    rec(self) -> *SurfaceRec = ptr_cast(self.handle)
+    // The fields are read through a pointer to SDL's own storage, which is what makes this handle
+    // a view rather than a copy. It is private because it answers a pointer: the accessors below
+    // read through it and hand back values, which is the only safe shape for a caller.
+    private rec(self) -> *SurfaceRec = ptr_cast(self.handle)
 
     width(self) -> i32 = self.rec().w
 
@@ -109,6 +112,11 @@ struct Surface
     pitch(self) -> i32 = self.rec().pitch
 
     pixels(self) -> *u8 = self.rec().pixels
+
+    // The surface's pixel format, one of the `PIXELFORMAT_*` values. Worth asking because it is not
+    // always the one requested: SDL_ttf's solid and shaded renders answer an 8-bit palettized
+    // surface, and its blended one a 32-bit ARGB.
+    format(self) -> u32 = u32(self.rec().format)
 
     // One pixel's channels, with whatever conversion the surface's format needs. Slow per pixel —
     // it is for a test or a colour picker, not for a scan.
