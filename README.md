@@ -5,12 +5,13 @@ clipboard, the system file dialog, queued audio, and the monotonic clock a frame
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.1.2" }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.2.0" }
 }
 ```
 
 ```sysl
 import sh.sysl.sdl3.*
+import sh.sysl.sdl3.c.{INIT_VIDEO, WINDOW_RESIZABLE}
 
 main()
     init(INIT_VIDEO)
@@ -23,18 +24,56 @@ main()
     while running
         while true
             poll_event() match
-                Some(e) -> if e.kind == EVENT_QUIT then running = false
+                Some(e) -> if e.kind() == EventKind.Quit then running = false
                 None -> break
 
         renderer.clear_to(rgb(20, 20, 30))
-        renderer.set_draw_color(rgb(220, 80, 60))
         renderer.fill_circle(320.0, 240.0, 80.0, rgb(220, 80, 60))
         renderer.present()
-
-    renderer.destroy()
-    window.destroy()
-    quit()
 ```
+
+There is no teardown. The renderer and the window go when the last reference to each does, and the
+process ending does the rest.
+
+## Two layers, and why a program may reach into the lower one
+
+`sh.sysl.sdl3.c` holds everything that is C: the link directive, the headers, the blocks that ask
+the C compiler for SDL's numbers, the six opaque handles, the ABI structs and the hundred and
+thirty declarations. `sh.sysl.sdl3` is what an application imports.
+
+The split keeps two jobs apart. The lower one has to be **faithful** — a signature that disagrees
+with the header links perfectly and corrupts the call at run time — and the upper one has to be
+**pleasant**, which is a different question and would otherwise be answered in the same breath.
+
+**SDL's masks and scancodes stay in `c`, and a program names the ones it wants.** They are an index
+space rather than a small closed set — `KeyboardState` is literally an array indexed by scancode,
+and SDL has two hundred and forty of them — so there is nothing for the upper layer to improve
+about them:
+
+```sysl
+import sh.sysl.sdl3.*
+import sh.sysl.sdl3.c.{WINDOW_RESIZABLE, SCANCODE_ESCAPE, KMOD_SHIFT}
+```
+
+`c.Rect`, `c.FRect`, `c.FPoint` and `c.Vertex` live there for the same reason — they are SDL's own
+layouts and cross by pointer. `rect`, `frect` and `fpoint` build one without naming the type.
+
+## The numbers are asked for, not written down
+
+Every constant this package uses is a `c const` block: the C compiler works the value out from
+SDL's own headers, for the target being built. `design/15 §7` calls a transcribed constant "correct
+on one machine" with "nothing checking it".
+
+**Converting the 262 that were transcribed found two that were wrong.** Neither was anything a test
+here could have caught, because the number it would have compared against is the number that was
+wrong:
+
+| written down as | which is actually | what happened |
+|---|---|---|
+| `WINDOW_ALWAYS_ON_TOP = 0x8000` | `SDL_WINDOW_MOUSE_RELATIVE_MODE` | a window asking to stay above the others had the pointer hidden and warped instead |
+| `EVENT_TEXT_EDITING = 0x304` | `SDL_EVENT_KEYMAP_CHANGED` | an input method's composition events never matched anything |
+
+Both compiled, linked and ran.
 
 ## Installing SDL3, and the two flags
 
@@ -42,20 +81,25 @@ Nothing is vendored here. SDL is a large C project with its own build system and
 backends, so a package carrying it would be maintaining a port rather than binding a library.
 
 ```
-brew install sdl3                       # or the distribution's package
+brew install sdl3                     # macOS
+sudo apt install libsdl3-dev          # Debian / Ubuntu
 ```
 
-A build then needs the prefix on the command line, because a toolchain searches its own directories
-and Homebrew's is not one of them:
+**The headers are needed as well as the library**, because of the section above. A build names the
+prefix at both ends:
 
 ```
-sysl run prog.sysl --include-path /opt/homebrew/include --link-path /opt/homebrew/lib
+sysl run prog.sysl --include-path sdl3=/opt/homebrew/include --link-path /opt/homebrew/lib
 ```
 
-That is deliberate rather than a gap. `design/15 §8` refuses both a `@link_path` attribute and a
-`package.hocon` field for it: where a prefix lives is a fact about somebody's laptop, not a property
-of the package. `LIBRARY_PATH` and `CPATH` work too, since clang reads them, and are the better
-answer on a machine where the setting never changes.
+The include path is given *by name* — `sdl3=` — which is what answers the `requires { headers }`
+declaration in `package.hocon`. Forget it and the refusal names this package and says where the
+headers usually are, rather than clang reporting a file the caller never wrote.
+
+That both flags are needed is deliberate rather than a gap. `design/15 §8` refuses both a
+`@link_path` attribute and a `package.hocon` field for a prefix: where one lives is a fact about
+somebody's laptop, not a property of the package. `LIBRARY_PATH` and `CPATH` work too, since clang
+reads them, and are the better answer on a machine where the setting never changes.
 
 ## The companion libraries are separate packages
 
@@ -72,10 +116,12 @@ holding all four would put `-lSDL3_ttf -lSDL3_image -lSDL3_mixer` on the link li
 that used any of it, and a machine with only SDL3 installed could not link a program that draws
 rectangles. Depend on what you use.
 
-## What it looks like
+## Handles own what they point at
 
-**A handle is a one-field struct over the pointer SDL gave.** `Window`, `Renderer`, `Texture`,
-`Surface`, `Cursor` and `AudioStream` cost nothing at run time and carry their methods.
+`Window`, `Renderer`, `Texture`, `Surface` and `AudioStream` are each reached through a `&T` with an
+`impl Drop`, so the C object goes when the last reference to it does. **`destroy` is not part of
+this API.** A window closed twice, or drawn into after it was closed, is no longer something a
+program can express.
 
 **Anything that creates one answers `Option`.** SDL says "failed" with a null pointer and the reason
 in `error()`; an `Option` is the same information in the shape the language already reads, and a
@@ -85,9 +131,40 @@ null handle cannot be passed on by accident.
 type than the library gives would be inventing the failure cases too. When something answers
 `false`, `error()` says why.
 
-**Nothing has a destructor; `destroy` is written where the program decides the thing is finished.**
-A destructor in sysl runs for a value behind a `&T`, so it would mean a heap box per texture — a
-real cost in a draw loop, for a resource whose lifetime the program already knows.
+**`quit()` frees everything SDL made, so nothing may still be holding a handle when it is called.**
+That is SDL's rule rather than this binding's, and a destructor cannot know about it. In practice a
+program that never calls `quit()` is fine — the process ending does the same work — and one that
+does should let its handles go out of scope first.
+
+### Cursors are two types, because SDL gives no other way to say it
+
+`create_system_cursor` answers a `&Cursor` this program owns. `current_cursor` and `default_cursor`
+answer a `BorrowedCursor`, which can be made active and **has no destructor at all**.
+
+Cairo's binding solves the same problem with one type, by taking a reference on anything the library
+lends. SDL has no `SDL_ReferenceCursor`, so the honest answer is that a lent cursor is a different
+thing — and a type says it in a form the compiler reads, where the previous version of this package
+said it in a comment beginning *"never for what `default_cursor` answers"*.
+
+## Enumerations rather than piles of constants
+
+Ten of them: `EventKind`, `PixelFormat`, `Colorspace`, `BlendMode`, `TextureAccess`, `ScaleMode`,
+`MouseButton`, `AudioFormat`, `SystemCursor` and `FileDialogKind`. Each has a `code` for going out
+to SDL; the ones SDL ever *answers* also have an `of` and an `Other` arm for a value this package
+does not name, which is an ordinary answer rather than a failure.
+
+```sysl
+poll_event() match
+    Some(e) ->
+        e.kind() match
+            Quit -> running = false
+            KeyDown -> if e.key_scancode() == SCANCODE_ESCAPE then running = false
+            MouseButtonDown -> if e.mouse_button() == MouseButton.Left then click(e.mouse_x(), e.mouse_y())
+            _ -> ()
+    None -> ()
+```
+
+Each also has a `Display`, so a report says `window pixel size changed` rather than `519`.
 
 ## Callbacks
 
@@ -105,7 +182,7 @@ struct Tally
 
 val t: &Tally = Tally(0)
 
-add_event_watch(e -> if e.kind == EVENT_QUIT then t.n += 1)
+add_event_watch(e -> if e.kind() == EventKind.Quit then t.n += 1)
 ```
 
 ## The clock
@@ -127,7 +204,7 @@ it to the scheduler, and costs a core while it waits.
 
 ## Reading the frame back
 
-`renderer.read_pixels()` answers what is in the target as a `Surface`, which is what a screenshot,
+`renderer.read_pixels()` answers what is in the target as a `&Surface`, which is what a screenshot,
 a colour picker and a test that checks *where* a call drew are all written with. `read_pixels_rect`
 takes one rectangle instead, in the target's own pixels.
 
@@ -139,25 +216,16 @@ pulls the pixels back across the bus, so it belongs on a key rather than in a fr
 val shot = renderer.read_pixels().expect("the frame")
 
 save_png(shot, "screenshot.png")        // sdl3-image
-shot.destroy()
 ```
 
 ## Events
 
-`SDL_Event` is a union of about thirty structs in 128 bytes. It is read here as one struct holding
-the header every event begins with, plus a view per variant that the accessors reinterpret into — so
-there is no shim and no hand-written offset arithmetic at a call site.
+`SDL_Event` is a union of about thirty structs in 128 bytes. `c` declares it as the header every
+event begins with plus a view per variant, and the accessors here reinterpret into whichever view a
+field belongs to — so there is no shim and no hand-written offset arithmetic at a call site.
 
-A field is only meaningful for the matching `kind`. That is what a union means and no binding can
-make it otherwise: match on `kind` first.
-
-```sysl
-poll_event() match
-    Some(e) ->
-        if e.kind == EVENT_KEY_DOWN && e.key_scancode() == SCANCODE_ESCAPE then running = false
-        if e.kind == EVENT_MOUSE_BUTTON_DOWN then click(e.mouse_x(), e.mouse_y())
-    None -> ()
-```
+A field is only meaningful for the matching kind. That is what a union means and no binding can make
+it otherwise: match on `kind()` first.
 
 ## Audio
 
@@ -172,20 +240,20 @@ the answer for anything more.
 ## Tests
 
 ```
-sysl test . --include-path /opt/homebrew/include --link-path /opt/homebrew/lib
+sysl test . --include-path sdl3=/opt/homebrew/include --link-path /opt/homebrew/lib
 ```
 
-Thirty-two tests, run headless against a real SDL3 — the dummy video and audio drivers create
+Forty-two tests, run headless against a real SDL3 — the dummy video and audio drivers create
 windows, renderers, textures and devices and draw into memory, so nothing here needs a display or a
 sound card.
 
-**Half of them exist to pin the transcribed constants.** Every `SDL_INIT_*`, window flag, pixel
-format, colorspace, scancode and event type is a `#define` with no symbol, so it was copied by hand
-— and a value that is wrong is usually wrong *quietly*: a pixel format that decodes to the wrong
-colours, a colorspace that shifts greens, an event type that simply never matches. Each is checked
-against something SDL itself computes from its own header — the name it gives a format, the flags it
-reports for a window it made, the number it stores in a texture's property bag — so nothing is
-trusted because it was typed carefully.
+**Half of them exist to pin the enumerations.** Every `code` and `of` is a `match` against a name
+the C compiler resolved, so a *typo* is impossible — but that the right variant sits on the right
+side of an arrow is checked by nothing at all, and a mapping with two lines swapped compiles, links
+and asks SDL for the wrong thing. So each enumeration is walked both ways, and several are pushed
+through SDL itself: the name it gives a format, the flags it reports for a window it made, the
+number it stores in a texture's property bag, and the pixel that comes back after a blend — which is
+the only way to see that `BlendMode.Blend` reached the library rather than merely type-checked.
 
 The struct layouts are pinned the same way: `SDL_Event` is 128 bytes, `SDL_Surface` 48, `SDL_Vertex`
 32, and every variant view is built as C lays it out and read back through the public accessors, so

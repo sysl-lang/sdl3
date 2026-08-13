@@ -3,25 +3,29 @@
 // This is the block a consumer writes to reach this package:
 //
 //     dependencies {
-//       sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.1.2" }
+//       sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.2.0" }
 //     }
 //
 // The coordinate is identity rather than a URL, so it carries no `https://`, and the version is the
-// tag `v0.1.2` on this repository.
+// tag `v0.2.0` on this repository.
 //
-// **SDL3 has to be installed.** Nothing is vendored here: SDL is a large C project with its own
-// build system and its own platform backends, and a package that carried it would be carrying a
-// port rather than a binding. `brew install sdl3` on a Mac, the distribution's package elsewhere.
+// **SDL3 has to be installed, and so do its headers.** Nothing is vendored here: SDL is a large C
+// project with its own build system and its own platform backends, and a package that carried it
+// would be carrying a port rather than a binding.
 //
-// **A build needs the prefix on the command line**, because a toolchain searches its own
-// directories and Homebrew's is not one of them:
+//     brew install sdl3              # macOS
+//     sudo apt install libsdl3-dev   # Debian / Ubuntu
 //
-//     sysl run prog.sysl --include-path /opt/homebrew/include --link-path /opt/homebrew/lib
+// **A build needs the prefix on the command line**, at both ends, because a toolchain searches its
+// own directories and Homebrew's is not one of them:
 //
-// That is deliberate and is not a gap. `15 §8` refuses both a `@link_path` attribute and a
-// `package.hocon` field for it, because where a prefix lives is a fact about somebody's laptop
-// rather than a property of the package. `LIBRARY_PATH` and `CPATH` work too, since clang reads
-// them, and are the better answer on a machine where the setting never changes.
+//     sysl run prog.sysl --include-path sdl3=/opt/homebrew/include --link-path /opt/homebrew/lib
+//
+// The headers are read because `sh.sysl.sdl3.c` asks the C compiler for SDL's own constants rather
+// than transcribing them. That is deliberate and is not a gap: `15 §8` refuses both a `@link_path`
+// attribute and a `package.hocon` field for a prefix, because where one lives is a fact about
+// somebody's laptop rather than a property of the package. `LIBRARY_PATH` and `CPATH` work too,
+// since clang reads them, and are the better answer on a machine where the setting never changes.
 //
 // **The companion libraries are separate packages, and that is forced rather than chosen.** A link
 // directive is never pruned (`LinkDirectives`: "nothing is pruned"), so a single package holding
@@ -32,7 +36,7 @@
 
 package {
   name    = "sdl3"
-  version = "0.1.2"
+  version = "0.2.0"
 }
 
 // **`posix`, because SDL is a hosted library.** It opens devices, starts threads, talks to a window
@@ -40,11 +44,21 @@ package {
 // there" into one refusal rather than a link error naming `SDL_Init`.
 //
 // **`heap`, because the binding allocates.** A `CString` copied for every C call that takes text,
-// the buffer a vertex array is built in, the event union polled into — all of it is sysl storage
-// with a lifetime, which is what keeps this side from ever having to free what SDL handed back.
+// the buffer a vertex array is built in, the handle every `&T` sits behind — all of it is sysl
+// storage with a lifetime, which is what keeps this side from ever having to free what SDL handed
+// back.
 //
 // `posix` implies `os`, so that one is not written out.
 requires {
   heap  = true
   posix = true
+
+  // `sh.sysl.sdl3.c` asks the C compiler for SDL's constants rather than transcribing them, so the
+  // headers are read at compile time and not only at link time. Saying so here turns a forgotten
+  // include path into one refusal naming sdl3, rather than clang's "'SDL3/SDL.h' file not found" —
+  // a file the caller never wrote and has no way to place. The sentence is the whole point of the
+  // key: it is read by someone who does not yet know what this package needs.
+  headers {
+    sdl3 = "SDL3's own headers — `brew install sdl3` puts them in /opt/homebrew/include/SDL3, and Debian's libsdl3-dev in /usr/include/SDL3; the path to give is the directory *above* SDL3"
+  }
 }
