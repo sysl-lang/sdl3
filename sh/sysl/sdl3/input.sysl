@@ -1,6 +1,6 @@
 module sh.sysl.sdl3
-@link("SDL3")
 
+import sh.sysl.sdl3.c
 import sysl.text.from_cstring
 
 // Keyboard, mouse and cursor — the polled half of input, beside the events.
@@ -9,27 +9,15 @@ import sysl.text.from_cstring
 // moment", which is what a text field or a shortcut wants; the state below says "this key is held
 // right now", which is what a movement loop wants and what no sequence of events reconstructs
 // without keeping its own table.
+//
+// **The scancodes, keycodes and modifier masks live in `c`**, because they are SDL's own numbers
+// and an index space rather than a small closed set — `KeyboardState` is literally an array
+// indexed by scancode, and SDL has two hundred and forty of them. A program names the ones it
+// wants:
+//
+//     import sh.sysl.sdl3.c.{SCANCODE_W, SCANCODE_ESCAPE, KMOD_SHIFT}
 
-extern "SDL_GetKeyboardState" sdl_get_keyboard_state(numkeys: *i32) -> *bool
-extern "SDL_GetModState" sdl_get_mod_state() -> u16
-extern "SDL_SetModState" sdl_set_mod_state(mod: u16)
-extern "SDL_GetMouseState" sdl_get_mouse_state(x: *f32, y: *f32) -> u32
-extern "SDL_GetGlobalMouseState" sdl_get_global_mouse_state(x: *f32, y: *f32) -> u32
-extern "SDL_WarpMouseInWindow" sdl_warp_mouse_in_window(window: *u8, x: f32, y: f32)
-extern "SDL_GetScancodeName" sdl_get_scancode_name(scancode: i32) -> *u8
-extern "SDL_GetKeyName" sdl_get_key_name(key: u32) -> *u8
-extern "SDL_GetKeyFromScancode" sdl_get_key_from_scancode(scancode: i32, mod: u16, key_event: bool) -> u32
-
-extern "SDL_CreateSystemCursor" sdl_create_system_cursor(id: i32) -> *u8
-extern "SDL_SetCursor" sdl_set_cursor(cursor: *u8) -> bool
-extern "SDL_GetCursor" sdl_get_cursor() -> *u8
-extern "SDL_GetDefaultCursor" sdl_get_default_cursor() -> *u8
-extern "SDL_DestroyCursor" sdl_destroy_cursor(cursor: *u8)
-extern "SDL_ShowCursor" sdl_show_cursor() -> bool
-extern "SDL_HideCursor" sdl_hide_cursor() -> bool
-extern "SDL_CursorVisible" sdl_cursor_visible() -> bool
-
-// ---- keyboard ----
+// ## Keyboard
 
 // A snapshot of which physical keys are held, indexed by scancode.
 //
@@ -53,47 +41,97 @@ end KeyboardState
 // ask each time round rather than caching.
 keyboard_state() -> KeyboardState
     var n: i32 = 0
-    val p = sdl_get_keyboard_state(&n)
+    val p = c.get_keyboard_state(&n)
 
     KeyboardState(p, n)
 end keyboard_state
 
-// The modifier keys held right now, a mask of the `KMOD_*` values. This is what a mouse or wheel
+// The modifier keys held right now, a mask of `c`'s `KMOD_*` values. This is what a mouse or wheel
 // event has to use, since only a keyboard event carries a modifier field of its own.
-mod_state() -> u16 = sdl_get_mod_state()
+mod_state() -> u16 = c.get_mod_state()
 
 // Tell SDL which modifiers are held. For a program synthesising input; ordinary code reads.
-set_mod_state(m: u16) = sdl_set_mod_state(m)
+set_mod_state(m: u16) = c.set_mod_state(m)
 
 // The platform's name for a physical key — "Left Shift", "F1" — which is what a key-binding screen
 // shows. Empty for a scancode the platform has no name for.
-scancode_name(scancode: i32) -> string = from_cstring(sdl_get_scancode_name(scancode)).unwrap_or("")
+scancode_name(scancode: i32) -> string =
+    from_cstring(c.get_scancode_name(scancode)).unwrap_or("")
 
 // The name of a *logical* key, which follows the layout: the same scancode is "Q" on QWERTY and "A"
 // on AZERTY.
-key_name(key: u32) -> string = from_cstring(sdl_get_key_name(key)).unwrap_or("")
+key_name(key: u32) -> string = from_cstring(c.get_key_name(key)).unwrap_or("")
 
 // What the current layout makes of a physical key.
-key_from_scancode(scancode: i32) -> u32 = sdl_get_key_from_scancode(scancode, KMOD_NONE, false)
+key_from_scancode(scancode: i32) -> u32 = c.get_key_from_scancode(scancode, c.KMOD_NONE, false)
 
-// ---- mouse ----
+// ## Mouse
+
+// Which button an event is about.
+enum MouseButton
+    Left
+    Middle
+    Right
+
+    // The two side buttons, "back" and "forward" on most mice.
+    X1
+    X2
+
+    Other(code: u8)
+
+    code(self) -> u8
+        self match
+            Left -> c.BUTTON_LEFT
+            Middle -> c.BUTTON_MIDDLE
+            Right -> c.BUTTON_RIGHT
+            X1 -> c.BUTTON_X1
+            X2 -> c.BUTTON_X2
+            Other(n) -> n
+
+    of(code: u8) -> MouseButton
+        code match
+            c.BUTTON_LEFT -> Left
+            c.BUTTON_MIDDLE -> Middle
+            c.BUTTON_RIGHT -> Right
+            c.BUTTON_X1 -> X1
+            c.BUTTON_X2 -> X2
+            n -> Other(n)
+end MouseButton
+
+impl Eq for MouseButton
+    eq(self, other: MouseButton) -> bool = self.code() == other.code()
+
+impl Display for MouseButton
+    display(self, out: *Writer, fmt: FormatSpec)
+        val s = self match
+            Left -> "left"
+            Middle -> "middle"
+            Right -> "right"
+            X1 -> "x1"
+            X2 -> "x2"
+            Other(_) -> "an unknown button"
+
+        display_str(s, out, fmt)
 
 // Where the pointer is and which buttons are down.
+//
+// The button field is a **mask**, not a `MouseButton`: several may be down at once, which is
+// exactly what an enumeration cannot say. `c`'s `BUTTON_*MASK` values name the bits.
 struct MouseState
     buttons: u32
     x: f32
     y: f32
 
-    left(self) -> bool = (self.buttons & BUTTON_LMASK) != 0
-    middle(self) -> bool = (self.buttons & BUTTON_MMASK) != 0
-    right(self) -> bool = (self.buttons & BUTTON_RMASK) != 0
+    left(self) -> bool = (self.buttons & c.BUTTON_LMASK) != 0
+    middle(self) -> bool = (self.buttons & c.BUTTON_MMASK) != 0
+    right(self) -> bool = (self.buttons & c.BUTTON_RMASK) != 0
 end MouseState
 
 // The pointer's position in the focused window's coordinates, and its buttons.
 mouse_state() -> MouseState
     var x: f32 = 0.0
     var y: f32 = 0.0
-    val b = sdl_get_mouse_state(&x, &y)
+    val b = c.get_mouse_state(&x, &y)
 
     MouseState(b, x, y)
 end mouse_state
@@ -103,265 +141,152 @@ end mouse_state
 global_mouse_state() -> MouseState
     var x: f32 = 0.0
     var y: f32 = 0.0
-    val b = sdl_get_global_mouse_state(&x, &y)
+    val b = c.get_global_mouse_state(&x, &y)
 
     MouseState(b, x, y)
 end global_mouse_state
 
 // Move the pointer to a point in a window.
-warp_mouse(window: Window, x: f32, y: f32) = sdl_warp_mouse_in_window(window.handle, x, y)
+warp_mouse(window: &Window, x: f32, y: f32) = c.warp_mouse_in_window(window.handle, x, y)
 
-// ---- cursors ----
+// ## Cursors
 //
 // The pointer's shape is process-wide rather than per-window: setting one changes it everywhere
 // until the next set. A program that wants a resize arrow over a divider and an I-beam over text
 // builds the shapes it needs once — they are cheap, and SDL caches the platform cursor behind each
 // — keeps the handles, and sets one as the pointer moves.
+//
+// **There are two cursor types and the difference is ownership, which SDL gives no other way to
+// express.** A cursor this program made is a `&Cursor` and goes when the last reference does. A
+// cursor SDL *lends* — the current one, the platform's default — is a `BorrowedCursor`, which can
+// be made active and nothing else. Cairo could take a reference on a lent object and hand back one
+// type; SDL has no `SDL_ReferenceCursor`, so the honest answer is that they are different things.
 
-// A mouse pointer shape.
+// One of the built-in shapes.
+enum SystemCursor
+    Default
+    Text
+    Wait
+    Crosshair
+    Progress
+
+    // The two families of resize cursor look the same on most platforms: `NwseResize`, `NeswResize`,
+    // `EwResize` and `NsResize` are the diagonal and axis double-arrows, while the per-edge `NResize`
+    // and so on let a platform draw a directional single arrow where it has one.
+    NwseResize
+    NeswResize
+    EwResize
+    NsResize
+
+    Move
+    NotAllowed
+    Pointer
+
+    NwResize
+    NResize
+    NeResize
+    EResize
+    SeResize
+    SResize
+    SwResize
+    WResize
+
+    code(self) -> i32
+        self match
+            Default -> c.SYSTEM_CURSOR_DEFAULT
+            Text -> c.SYSTEM_CURSOR_TEXT
+            Wait -> c.SYSTEM_CURSOR_WAIT
+            Crosshair -> c.SYSTEM_CURSOR_CROSSHAIR
+            Progress -> c.SYSTEM_CURSOR_PROGRESS
+            NwseResize -> c.SYSTEM_CURSOR_NWSE_RESIZE
+            NeswResize -> c.SYSTEM_CURSOR_NESW_RESIZE
+            EwResize -> c.SYSTEM_CURSOR_EW_RESIZE
+            NsResize -> c.SYSTEM_CURSOR_NS_RESIZE
+            Move -> c.SYSTEM_CURSOR_MOVE
+            NotAllowed -> c.SYSTEM_CURSOR_NOT_ALLOWED
+            Pointer -> c.SYSTEM_CURSOR_POINTER
+            NwResize -> c.SYSTEM_CURSOR_NW_RESIZE
+            NResize -> c.SYSTEM_CURSOR_N_RESIZE
+            NeResize -> c.SYSTEM_CURSOR_NE_RESIZE
+            EResize -> c.SYSTEM_CURSOR_E_RESIZE
+            SeResize -> c.SYSTEM_CURSOR_SE_RESIZE
+            SResize -> c.SYSTEM_CURSOR_S_RESIZE
+            SwResize -> c.SYSTEM_CURSOR_SW_RESIZE
+            WResize -> c.SYSTEM_CURSOR_W_RESIZE
+end SystemCursor
+
+impl Display for SystemCursor
+    display(self, out: *Writer, fmt: FormatSpec)
+        val s = self match
+            Default -> "default"
+            Text -> "text"
+            Wait -> "wait"
+            Crosshair -> "crosshair"
+            Progress -> "progress"
+            NwseResize -> "nwse resize"
+            NeswResize -> "nesw resize"
+            EwResize -> "ew resize"
+            NsResize -> "ns resize"
+            Move -> "move"
+            NotAllowed -> "not allowed"
+            Pointer -> "pointer"
+            NwResize -> "nw resize"
+            NResize -> "n resize"
+            NeResize -> "ne resize"
+            EResize -> "e resize"
+            SeResize -> "se resize"
+            SResize -> "s resize"
+            SwResize -> "sw resize"
+            WResize -> "w resize"
+
+        display_str(s, out, fmt)
+
+// A mouse pointer shape this program made and owns.
 struct Cursor
-    handle: *u8
+    handle: *c.Cursor
 
     // Make this the active shape, everywhere. `true` on success.
-    set(self) -> bool = sdl_set_cursor(self.handle)
-
-    // Free it. **Only for a cursor this program made** — never for what `default_cursor` or
-    // `current_cursor` answers, which SDL owns.
-    destroy(self) = sdl_destroy_cursor(self.handle)
+    set(&self) -> bool = c.set_cursor(self.handle)
 end Cursor
 
-// One of the built-in shapes — `id` is a `SYSTEM_CURSOR_*` value. Nothing if the platform cannot
-// make it. The result belongs to the caller and is freed with `Cursor.destroy`.
-create_system_cursor(id: i32) -> Option[Cursor]
-    val c = sdl_create_system_cursor(id)
+// It goes when the last reference does. This is why the type is separate from `BorrowedCursor`:
+// SDL's own cursors must never reach here.
+impl Drop for Cursor
+    drop(self) = c.destroy_cursor(self.handle)
 
-    if c == null then None else Some(Cursor(c))
+// A cursor SDL owns and lends. It can be made active and nothing else — there is no way to free one
+// from here, which is the point.
+struct BorrowedCursor
+    handle: *c.Cursor
+
+    set(self) -> bool = c.set_cursor(self.handle)
+end BorrowedCursor
+
+// One of the built-in shapes. Nothing if the platform cannot make it.
+create_system_cursor(id: SystemCursor) -> Option[&Cursor]
+    val h = c.create_system_cursor(id.code())
+
+    if h == null then None else Some(Cursor(h))
 end create_system_cursor
 
-// The shape currently set, or nothing when the default is in effect and none was set. **Does not
-// transfer ownership** — never destroy what this answers.
-current_cursor() -> Option[Cursor]
-    val c = sdl_get_cursor()
+// The shape currently set, or nothing when the default is in effect and none was set.
+current_cursor() -> Option[BorrowedCursor]
+    val h = c.get_cursor()
 
-    if c == null then None else Some(Cursor(c))
+    if h == null then None else Some(BorrowedCursor(h))
 end current_cursor
 
-// The platform's own default, the arrow. SDL owns it; do not destroy it.
-default_cursor() -> Option[Cursor]
-    val c = sdl_get_default_cursor()
+// The platform's own default, the arrow — what a program restores to after showing something else.
+default_cursor() -> Option[BorrowedCursor]
+    val h = c.get_default_cursor()
 
-    if c == null then None else Some(Cursor(c))
+    if h == null then None else Some(BorrowedCursor(h))
 end default_cursor
 
 // Show the pointer — it is visible to begin with. Visibility is independent of which shape is set.
-show_cursor() -> bool = sdl_show_cursor()
+show_cursor() -> bool = c.show_cursor()
 
 // Hide it, for a video player's idle chrome or a game that draws its own.
-hide_cursor() -> bool = sdl_hide_cursor()
+hide_cursor() -> bool = c.hide_cursor()
 
-cursor_visible() -> bool = sdl_cursor_visible()
-
-// ---- system cursor shapes (SDL_SystemCursor) ----
-//
-// The two families of resize cursor look the same on most platforms: `NWSE`, `NESW`, `EW` and `NS`
-// are the diagonal and axis double-arrows, while the per-edge `N`, `NE` and so on let a platform
-// draw a directional single arrow where it has one.
-
-const SYSTEM_CURSOR_DEFAULT: i32 = 0
-const SYSTEM_CURSOR_TEXT: i32 = 1
-const SYSTEM_CURSOR_WAIT: i32 = 2
-const SYSTEM_CURSOR_CROSSHAIR: i32 = 3
-const SYSTEM_CURSOR_PROGRESS: i32 = 4
-const SYSTEM_CURSOR_NWSE_RESIZE: i32 = 5
-const SYSTEM_CURSOR_NESW_RESIZE: i32 = 6
-const SYSTEM_CURSOR_EW_RESIZE: i32 = 7
-const SYSTEM_CURSOR_NS_RESIZE: i32 = 8
-const SYSTEM_CURSOR_MOVE: i32 = 9
-const SYSTEM_CURSOR_NOT_ALLOWED: i32 = 10
-const SYSTEM_CURSOR_POINTER: i32 = 11
-const SYSTEM_CURSOR_NW_RESIZE: i32 = 12
-const SYSTEM_CURSOR_N_RESIZE: i32 = 13
-const SYSTEM_CURSOR_NE_RESIZE: i32 = 14
-const SYSTEM_CURSOR_E_RESIZE: i32 = 15
-const SYSTEM_CURSOR_SE_RESIZE: i32 = 16
-const SYSTEM_CURSOR_S_RESIZE: i32 = 17
-const SYSTEM_CURSOR_SW_RESIZE: i32 = 18
-const SYSTEM_CURSOR_W_RESIZE: i32 = 19
-
-// ---- key modifiers (SDL_Keymod) ----
-//
-// The mask a keyboard event carries and `mod_state` answers. The combined aliases match either
-// side, which is what a shortcut should test.
-
-const KMOD_NONE: u16 = 0x0000
-const KMOD_LSHIFT: u16 = 0x0001
-const KMOD_RSHIFT: u16 = 0x0002
-const KMOD_LEVEL5: u16 = 0x0004
-const KMOD_LCTRL: u16 = 0x0040
-const KMOD_RCTRL: u16 = 0x0080
-const KMOD_LALT: u16 = 0x0100
-const KMOD_RALT: u16 = 0x0200
-const KMOD_LGUI: u16 = 0x0400
-const KMOD_RGUI: u16 = 0x0800
-const KMOD_NUM: u16 = 0x1000
-const KMOD_CAPS: u16 = 0x2000
-const KMOD_MODE: u16 = 0x4000
-const KMOD_SCROLL: u16 = 0x8000
-
-const KMOD_SHIFT: u16 = 0x0003
-const KMOD_CTRL: u16 = 0x00c0
-const KMOD_ALT: u16 = 0x0300
-const KMOD_GUI: u16 = 0x0c00
-
-// ---- scancodes ----
-//
-// The physical keys, which are USB HID usage ids and do not move with the keyboard layout. This is
-// what `KeyboardState.held` is indexed by and what a game's movement keys should be written in
-// terms of; a *shortcut* wants the logical keycode instead, since the user pressing "the key marked
-// Q" is what they mean.
-
-const SCANCODE_A: i32 = 4
-const SCANCODE_B: i32 = 5
-const SCANCODE_C: i32 = 6
-const SCANCODE_D: i32 = 7
-const SCANCODE_E: i32 = 8
-const SCANCODE_F: i32 = 9
-const SCANCODE_G: i32 = 10
-const SCANCODE_H: i32 = 11
-const SCANCODE_I: i32 = 12
-const SCANCODE_J: i32 = 13
-const SCANCODE_K: i32 = 14
-const SCANCODE_L: i32 = 15
-const SCANCODE_M: i32 = 16
-const SCANCODE_N: i32 = 17
-const SCANCODE_O: i32 = 18
-const SCANCODE_P: i32 = 19
-const SCANCODE_Q: i32 = 20
-const SCANCODE_R: i32 = 21
-const SCANCODE_S: i32 = 22
-const SCANCODE_T: i32 = 23
-const SCANCODE_U: i32 = 24
-const SCANCODE_V: i32 = 25
-const SCANCODE_W: i32 = 26
-const SCANCODE_X: i32 = 27
-const SCANCODE_Y: i32 = 28
-const SCANCODE_Z: i32 = 29
-
-const SCANCODE_1: i32 = 30
-const SCANCODE_2: i32 = 31
-const SCANCODE_3: i32 = 32
-const SCANCODE_4: i32 = 33
-const SCANCODE_5: i32 = 34
-const SCANCODE_6: i32 = 35
-const SCANCODE_7: i32 = 36
-const SCANCODE_8: i32 = 37
-const SCANCODE_9: i32 = 38
-const SCANCODE_0: i32 = 39
-
-const SCANCODE_RETURN: i32 = 40
-const SCANCODE_ESCAPE: i32 = 41
-const SCANCODE_BACKSPACE: i32 = 42
-const SCANCODE_TAB: i32 = 43
-const SCANCODE_SPACE: i32 = 44
-const SCANCODE_MINUS: i32 = 45
-const SCANCODE_EQUALS: i32 = 46
-const SCANCODE_LEFTBRACKET: i32 = 47
-const SCANCODE_RIGHTBRACKET: i32 = 48
-const SCANCODE_BACKSLASH: i32 = 49
-const SCANCODE_SEMICOLON: i32 = 51
-const SCANCODE_APOSTROPHE: i32 = 52
-const SCANCODE_GRAVE: i32 = 53
-const SCANCODE_COMMA: i32 = 54
-const SCANCODE_PERIOD: i32 = 55
-const SCANCODE_SLASH: i32 = 56
-const SCANCODE_CAPSLOCK: i32 = 57
-
-const SCANCODE_F1: i32 = 58
-const SCANCODE_F2: i32 = 59
-const SCANCODE_F3: i32 = 60
-const SCANCODE_F4: i32 = 61
-const SCANCODE_F5: i32 = 62
-const SCANCODE_F6: i32 = 63
-const SCANCODE_F7: i32 = 64
-const SCANCODE_F8: i32 = 65
-const SCANCODE_F9: i32 = 66
-const SCANCODE_F10: i32 = 67
-const SCANCODE_F11: i32 = 68
-const SCANCODE_F12: i32 = 69
-
-const SCANCODE_PRINTSCREEN: i32 = 70
-const SCANCODE_SCROLLLOCK: i32 = 71
-const SCANCODE_PAUSE: i32 = 72
-const SCANCODE_INSERT: i32 = 73
-const SCANCODE_HOME: i32 = 74
-const SCANCODE_PAGEUP: i32 = 75
-const SCANCODE_DELETE: i32 = 76
-const SCANCODE_END: i32 = 77
-const SCANCODE_PAGEDOWN: i32 = 78
-const SCANCODE_RIGHT: i32 = 79
-const SCANCODE_LEFT: i32 = 80
-const SCANCODE_DOWN: i32 = 81
-const SCANCODE_UP: i32 = 82
-
-const SCANCODE_NUMLOCK: i32 = 83
-const SCANCODE_KP_DIVIDE: i32 = 84
-const SCANCODE_KP_MULTIPLY: i32 = 85
-const SCANCODE_KP_MINUS: i32 = 86
-const SCANCODE_KP_PLUS: i32 = 87
-const SCANCODE_KP_ENTER: i32 = 88
-const SCANCODE_KP_1: i32 = 89
-const SCANCODE_KP_2: i32 = 90
-const SCANCODE_KP_3: i32 = 91
-const SCANCODE_KP_4: i32 = 92
-const SCANCODE_KP_5: i32 = 93
-const SCANCODE_KP_6: i32 = 94
-const SCANCODE_KP_7: i32 = 95
-const SCANCODE_KP_8: i32 = 96
-const SCANCODE_KP_9: i32 = 97
-const SCANCODE_KP_0: i32 = 98
-const SCANCODE_KP_PERIOD: i32 = 99
-
-const SCANCODE_LCTRL: i32 = 224
-const SCANCODE_LSHIFT: i32 = 225
-const SCANCODE_LALT: i32 = 226
-const SCANCODE_LGUI: i32 = 227
-const SCANCODE_RCTRL: i32 = 228
-const SCANCODE_RSHIFT: i32 = 229
-const SCANCODE_RALT: i32 = 230
-const SCANCODE_RGUI: i32 = 231
-
-// ---- keycodes (SDL_Keycode) ----
-//
-// The *logical* keys, which follow the layout. A printable key's keycode is its Unicode code point,
-// so `'a'` is 97 and there is nothing to transcribe; what is listed here is the rest, whose values
-// are the scancode with SDL's `SDLK_SCANCODE_MASK` (bit 30) set.
-
-const KEY_RETURN: u32 = 0x0000000d
-const KEY_ESCAPE: u32 = 0x0000001b
-const KEY_BACKSPACE: u32 = 0x00000008
-const KEY_TAB: u32 = 0x00000009
-const KEY_SPACE: u32 = 0x00000020
-const KEY_DELETE: u32 = 0x0000007f
-
-const KEY_RIGHT: u32 = 0x4000004f
-const KEY_LEFT: u32 = 0x40000050
-const KEY_DOWN: u32 = 0x40000051
-const KEY_UP: u32 = 0x40000052
-const KEY_HOME: u32 = 0x4000004a
-const KEY_END: u32 = 0x4000004d
-const KEY_PAGEUP: u32 = 0x4000004b
-const KEY_PAGEDOWN: u32 = 0x4000004e
-const KEY_INSERT: u32 = 0x40000049
-
-const KEY_F1: u32 = 0x4000003a
-const KEY_F2: u32 = 0x4000003b
-const KEY_F3: u32 = 0x4000003c
-const KEY_F4: u32 = 0x4000003d
-const KEY_F5: u32 = 0x4000003e
-const KEY_F6: u32 = 0x4000003f
-const KEY_F7: u32 = 0x40000040
-const KEY_F8: u32 = 0x40000041
-const KEY_F9: u32 = 0x40000042
-const KEY_F10: u32 = 0x40000043
-const KEY_F11: u32 = 0x40000044
-const KEY_F12: u32 = 0x40000045
+cursor_visible() -> bool = c.cursor_visible()

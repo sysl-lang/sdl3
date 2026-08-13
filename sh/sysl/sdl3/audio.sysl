@@ -1,7 +1,9 @@
 module sh.sysl.sdl3
-@link("SDL3")
 
+import sh.sysl.sdl3.c
+import sh.sysl.sdl3.c.INIT_AUDIO
 import sysl.slices.as_ptr
+import sysl.text.from_cstring
 
 // Audio playback, on the queue model.
 //
@@ -18,66 +20,76 @@ import sysl.slices.as_ptr
 // Opening several streams on the default device is fine and is how overlapping effects play at
 // once — SDL mixes them.
 
-// `SDL_AudioSpec` — three contiguous 32-bit words.
-struct AudioSpec
-    format: i32
-    channels: i32
-    freq: i32
+// What a sample looks like.
+enum AudioFormat
+    // 32-bit little-endian float samples in [-1, 1], the natural format for synthesised PCM.
+    F32
 
-extern "SDL_OpenAudioDeviceStream" sdl_open_audio_device_stream(devid: u32, spec: *AudioSpec,
-                                                                callback: *u8, userdata: *u8) -> *u8
-extern "SDL_ResumeAudioStreamDevice" sdl_resume_audio_stream_device(stream: *u8) -> bool
-extern "SDL_PauseAudioStreamDevice" sdl_pause_audio_stream_device(stream: *u8) -> bool
-extern "SDL_PutAudioStreamData" sdl_put_audio_stream_data(stream: *u8, buf: *u8, len: i32) -> bool
-extern "SDL_GetAudioStreamQueued" sdl_get_audio_stream_queued(stream: *u8) -> i32
-extern "SDL_ClearAudioStream" sdl_clear_audio_stream(stream: *u8) -> bool
-extern "SDL_GetAudioStreamGain" sdl_get_audio_stream_gain(stream: *u8) -> f32
-extern "SDL_SetAudioStreamGain" sdl_set_audio_stream_gain(stream: *u8, gain: f32) -> bool
-extern "SDL_DestroyAudioStream" sdl_destroy_audio_stream(stream: *u8)
-extern "SDL_FlushAudioStream" sdl_flush_audio_stream(stream: *u8) -> bool
+    // Signed 16-bit samples, what most files decode to.
+    S16
+
+    code(self) -> i32
+        self match
+            F32 -> c.AUDIO_F32
+            S16 -> c.AUDIO_S16
+
+    // SDL's own name for it — "SDL_AUDIO_F32LE" — which is a useful thing to print because it says
+    // the byte order the value carries and this name does not.
+    name(self) -> string = from_cstring(c.get_audio_format_name(self.code())).unwrap_or("")
+end AudioFormat
+
+impl Display for AudioFormat
+    display(self, out: *Writer, fmt: FormatSpec)
+        val s = self match
+            F32 -> "f32"
+            S16 -> "s16"
+
+        display_str(s, out, fmt)
 
 // A playback voice: samples go in, the device takes them out.
 struct AudioStream
-    handle: *u8
+    handle: *c.AudioStream
 
-    resume(self) -> bool = sdl_resume_audio_stream_device(self.handle)
+    resume(&self) -> bool = c.resume_audio_stream_device(self.handle)
 
-    pause(self) -> bool = sdl_pause_audio_stream_device(self.handle)
+    pause(&self) -> bool = c.pause_audio_stream_device(self.handle)
 
     // Queue float samples, each in [-1, 1]. **SDL copies them synchronously**, so the slice may be
     // reused or dropped the moment this returns — which is why there is no staging buffer here.
-    put(self, samples: []f32) -> bool
+    put(&self, samples: []f32) -> bool
         if samples.len == 0 then return true
 
-        sdl_put_audio_stream_data(self.handle, ptr_cast(as_ptr(samples)), i32(samples.len * 4))
+        c.put_audio_stream_data(self.handle, ptr_cast(as_ptr(samples)), i32(samples.len * 4))
     end put
 
     // Queue bytes already in the stream's own sample format — a decoder's buffer handed through
     // with no intermediate array.
-    put_bytes(self, bytes: []u8) -> bool
+    put_bytes(&self, bytes: []u8) -> bool
         if bytes.len == 0 then return true
 
-        sdl_put_audio_stream_data(self.handle, as_ptr(bytes), i32(bytes.len))
+        c.put_audio_stream_data(self.handle, as_ptr(bytes), i32(bytes.len))
     end put_bytes
 
     // Bytes still queued and not yet taken by the device. Zero means the voice is idle, which is
     // how a player picks a free stream rather than cutting off a sound still playing.
-    queued(self) -> i32 = sdl_get_audio_stream_queued(self.handle)
+    queued(&self) -> i32 = c.get_audio_stream_queued(self.handle)
 
     // Hand over whatever partial sample frame is buffered, so the tail of a sound is not held back
     // waiting for more. For the end of a clip, not for every push.
-    flush(self) -> bool = sdl_flush_audio_stream(self.handle)
+    flush(&self) -> bool = c.flush_audio_stream(self.handle)
 
-    clear(self) -> bool = sdl_clear_audio_stream(self.handle)
+    clear(&self) -> bool = c.clear_audio_stream(self.handle)
 
     // Playback gain: 1.0 leaves the samples alone, 0.0 is silence, above 1.0 amplifies and may
     // clip. SDL applies it as it feeds the device, so a volume control costs nothing per sample.
-    gain(self) -> f32 = sdl_get_audio_stream_gain(self.handle)
+    gain(&self) -> f32 = c.get_audio_stream_gain(self.handle)
 
-    set_gain(self, g: f32) -> bool = sdl_set_audio_stream_gain(self.handle, g)
-
-    destroy(self) = sdl_destroy_audio_stream(self.handle)
+    set_gain(&self, g: f32) -> bool = c.set_audio_stream_gain(self.handle, g)
 end AudioStream
+
+// The stream goes when the last reference does, which also closes the device it opened.
+impl Drop for AudioStream
+    drop(self) = c.destroy_audio_stream(self.handle)
 
 // Bring up the audio subsystem. Independent of video, so a program may open its window first and
 // decide about sound afterwards.
@@ -85,15 +97,16 @@ init_audio() -> bool = init_subsystem(INIT_AUDIO)
 
 quit_audio() = quit_subsystem(INIT_AUDIO)
 
-// Open a playback stream on the default device and start it. `format` is one of the `AUDIO_*`
-// values; the default is float samples, which is the natural shape for anything synthesised.
-open_audio_stream(freq: i32, channels: i32 = 1, format: i32 = AUDIO_F32) -> Option[AudioStream]
-    var spec = AudioSpec(format, channels, freq)
-    val s = sdl_open_audio_device_stream(AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, null, null)
+// Open a playback stream on the default device and start it. The default format is float samples,
+// which is the natural shape for anything synthesised.
+open_audio_stream(freq: i32, channels: i32 = 1,
+                  format: AudioFormat = AudioFormat.F32) -> Option[&AudioStream]
+    var spec = c.AudioSpec(format.code(), channels, freq)
+    val s = c.open_audio_device_stream(c.AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, null, null)
 
     if s == null then return None
 
-    val stream = AudioStream(s)
+    val stream: &AudioStream = AudioStream(s)
 
     stream.resume()
     Some(stream)

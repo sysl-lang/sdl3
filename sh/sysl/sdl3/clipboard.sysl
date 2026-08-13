@@ -1,6 +1,6 @@
 module sh.sysl.sdl3
-@link("SDL3")
 
+import sh.sysl.sdl3.c
 import sysl.text.{cstring, from_cstring}
 import sysl.buf.{Buf, buf}
 
@@ -10,27 +10,19 @@ import sysl.buf.{Buf, buf}
 // a binding has to get right. SDL allocates with its own allocator and supplies `SDL_free`, so the
 // text is copied into a sysl `string` and the buffer released before this side returns — nothing
 // leaves here pointing into storage SDL owns, and the caller never has a free to remember.
-
-extern "SDL_GetClipboardText" sdl_get_clipboard_text() -> *u8
-extern "SDL_SetClipboardText" sdl_set_clipboard_text(text: *u8) -> bool
-extern "SDL_HasClipboardText" sdl_has_clipboard_text() -> bool
-
-// `SDL_Locale` — two C strings, the second of which is null when the platform names no region.
-struct CLocale
-    language: *u8
-    country: *u8
-
-extern "SDL_GetPreferredLocales" sdl_get_preferred_locales(count: *i32) -> **CLocale
+//
+// That is why neither of these is a `&T` with a destructor: what comes back is already sysl's, and
+// the C allocation did not outlive the call.
 
 // The clipboard's text, or `""` when it holds none. SDL never answers null here.
 clipboard_text() -> string
-    val p = sdl_get_clipboard_text()
+    val p = c.get_clipboard_text()
 
     if p == null then return ""
 
     val s = from_cstring(p).unwrap_or("")
 
-    sdl_free(p)
+    c.free(p)
     s
 end clipboard_text
 
@@ -38,11 +30,11 @@ end clipboard_text
 set_clipboard_text(text: string) -> bool
     val t = cstring(text)
 
-    sdl_set_clipboard_text(t.ptr)
+    c.set_clipboard_text(t.ptr)
 end set_clipboard_text
 
 // Whether the clipboard holds non-empty text.
-has_clipboard_text() -> bool = sdl_has_clipboard_text()
+has_clipboard_text() -> bool = c.has_clipboard_text()
 
 // A language the user prefers, and the region they prefer it in. `country` is `""` where the
 // platform names no region — "fr" rather than "fr_CA" — which is a real answer and not a missing
@@ -52,7 +44,8 @@ struct Locale
     country: string
 
     // The two joined the way a locale is usually written: "en_GB", or just "en".
-    tag(self) -> string = if self.country == "" then self.language else self.language + "_" + self.country
+    tag(self) -> string =
+        if self.country == "" then self.language else self.language + "_" + self.country
 end Locale
 
 // The languages the user prefers, most-wanted first. Empty when the platform will not say.
@@ -63,7 +56,7 @@ end Locale
 preferred_locales() -> Buf[Locale]
     var out: Buf[Locale] = buf()
     var n: i32 = 0
-    val arr = sdl_get_preferred_locales(&n)
+    val arr = c.get_preferred_locales(&n)
 
     if arr == null then return out
 
@@ -77,6 +70,6 @@ preferred_locales() -> Buf[Locale]
         out.push(Locale(language, country))
         i += 1
 
-    sdl_free(ptr_cast(arr))
+    c.free(ptr_cast(arr))
     out
 end preferred_locales

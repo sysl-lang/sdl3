@@ -1,7 +1,7 @@
 module sh.sysl.sdl3
 @tests
-@link("SDL3")
 
+import sh.sysl.sdl3.c
 import sysl.text.{cstring, from_cstring}
 import sysl.buf.{Buf, buf}
 
@@ -12,32 +12,26 @@ import sysl.buf.{Buf, buf}
 // under a test runner with no session. The hint is set here rather than left to the environment so
 // that `sysl test .` is the whole command.
 //
-// **Half of this file exists to pin the transcribed constants.** Every `#define` in
-// `constants.sysl` was copied by hand, and a value that is wrong is usually wrong *quietly* — a
-// pixel format that decodes to the wrong colours, a colorspace that shifts greens, an event type
-// that simply never matches. So each is checked against something SDL itself computes from its own
-// header: the name it gives a format, the flags it reports for a window it made, the number it
-// stores in a texture's property bag. Nothing here trusts a number because it was typed carefully.
-
-extern "SDL_WasInit" sdl_was_init(flags: u32) -> u32
-extern "SDL_GetPixelFormatName" sdl_get_pixel_format_name(format: u32) -> *u8
-extern "SDL_GetAudioFormatName" sdl_get_audio_format_name(format: i32) -> *u8
-extern "SDL_GetWindowFlags" sdl_get_window_flags(window: *u8) -> u64
-extern "SDL_GetTextureScaleMode" sdl_get_texture_scale_mode(texture: *u8, mode: *i32) -> bool
-extern "SDL_GetTextureProperties" sdl_get_texture_properties(texture: *u8) -> u32
-extern "SDL_GetNumberProperty" sdl_get_number_property(props: u32, name: *u8, default: i64) -> i64
-extern "SDL_WriteSurfacePixel" sdl_write_surface_pixel(surface: *u8, x: i32, y: i32,
-                                                       r: u8, g: u8, b: u8, a: u8) -> bool
+// **Half of this file exists to pin the enumerations against SDL's own numbers.** The `code` and
+// `of` methods are `match`es over what the C compiler read out of SDL's headers, so a *name* that
+// does not exist is refused by clang — but that the right variant sits on the right side of an
+// arrow is checked by nothing at all. A mapping with two lines swapped compiles, links and asks SDL
+// for the wrong thing. So each enumeration is walked both ways, and several are pushed through SDL
+// itself: the name it gives a format, the flags it reports for a window it made, the number it
+// stores in a texture's property bag, the pixel that comes back after a blend.
+//
+// **No test that holds a handle calls `quit()`.** `SDL_Quit` frees everything SDL made, and a
+// `&Window` still alive afterwards would free it a second time when its last reference went —
+// which is a real rule of this binding and not a quirk of the tests. Handles go at the end of the
+// test that made them, so a later test may quit freely.
 
 // Bring SDL up headless. Every test that needs a window or a renderer starts here.
 headless() -> bool
     set_hint(HINT_VIDEO_DRIVER, "dummy")
-    init(INIT_VIDEO)
+    init(c.INIT_VIDEO)
 end headless
 
-format_name(f: u32) -> string = from_cstring(sdl_get_pixel_format_name(f)).unwrap_or("")
-
-// ---- layout ----
+// ## Layout
 
 // sysl's struct layout has to agree with C's, field for field, or reading a public struct and
 // filling an event union are both bets. These are the sizes clang computes for the same
@@ -45,15 +39,31 @@ format_name(f: u32) -> string = from_cstring(sdl_get_pixel_format_name(f)).unwra
 @test
 the_layouts_agree_with_c()
     assert_eq(sizeof(Color), 4usize, "SDL_Color is four bytes")
-    assert_eq(sizeof(Rect), 16usize, "SDL_Rect is four ints")
-    assert_eq(sizeof(FRect), 16usize, "SDL_FRect is four floats")
-    assert_eq(sizeof(FPoint), 8usize, "SDL_FPoint is two floats")
-    assert_eq(sizeof(Vertex), 32usize, "SDL_Vertex is eight floats, with no padding")
-    assert_eq(sizeof(SurfaceRec), 48usize, "SDL_Surface is 48 bytes")
-    assert_eq(sizeof(AudioSpec), 12usize, "SDL_AudioSpec is three 32-bit words")
-    assert_eq(sizeof(CFilter), 16usize, "SDL_DialogFileFilter is two pointers")
+    assert_eq(sizeof(c.Rect), 16usize, "SDL_Rect is four ints")
+    assert_eq(sizeof(c.FRect), 16usize, "SDL_FRect is four floats")
+    assert_eq(sizeof(c.FPoint), 8usize, "SDL_FPoint is two floats")
+    assert_eq(sizeof(c.Vertex), 32usize, "SDL_Vertex is eight floats, with no padding")
+    assert_eq(sizeof(c.Surface), 48usize, "SDL_Surface is 48 bytes")
+    assert_eq(sizeof(c.AudioSpec), 12usize, "SDL_AudioSpec is three 32-bit words")
+    assert_eq(sizeof(c.DialogFileFilter), 16usize, "SDL_DialogFileFilter is two pointers")
 
-// ---- the clock ----
+// Every variant view is the union's own size, which is what makes reinterpreting one into another
+// safe — a view that came out short would be reading a field past the end of the storage SDL
+// filled.
+@test
+every_event_view_is_the_size_of_the_union()
+    assert_eq(sizeof(c.Event), 128usize, "SDL_Event is 128 bytes")
+    assert_eq(sizeof(Event), 128usize, "and so is the wrapper, which holds nothing else")
+    assert_eq(sizeof(c.KeyboardEvent), 128usize, "the keyboard view")
+    assert_eq(sizeof(c.MouseMotionEvent), 128usize, "the motion view")
+    assert_eq(sizeof(c.MouseButtonEvent), 128usize, "the button view")
+    assert_eq(sizeof(c.MouseWheelEvent), 128usize, "the wheel view")
+    assert_eq(sizeof(c.TextEvent), 128usize, "the text view")
+    assert_eq(sizeof(c.DropEvent), 128usize, "the drop view")
+    assert_eq(sizeof(c.WindowEvent), 128usize, "the window view")
+    assert_eq(sizeof(c.UserEvent), 128usize, "the user view")
+
+// ## The clock
 
 // Nothing here asserts a duration to the millisecond — a test that did would fail on a loaded
 // machine, and would be measuring the scheduler rather than the binding. What it can assert is
@@ -88,22 +98,151 @@ the_clock_advances_and_its_scales_agree()
 
     quit()
 
-// Every variant view is the union's own size, which is what makes reinterpreting one into another
-// safe — a view that came out short would be reading a field past the end of the storage SDL
-// filled.
-@test
-every_event_view_is_the_size_of_the_union()
-    assert_eq(sizeof(Event), 128usize, "SDL_Event is 128 bytes")
-    assert_eq(sizeof(KeyboardEvent), 128usize, "the keyboard view")
-    assert_eq(sizeof(MouseMotionEvent), 128usize, "the motion view")
-    assert_eq(sizeof(MouseButtonEvent), 128usize, "the button view")
-    assert_eq(sizeof(MouseWheelEvent), 128usize, "the wheel view")
-    assert_eq(sizeof(TextEvent), 128usize, "the text view")
-    assert_eq(sizeof(DropEvent), 128usize, "the drop view")
-    assert_eq(sizeof(WindowEvent), 128usize, "the window view")
-    assert_eq(sizeof(UserEvent), 128usize, "the user view")
+// ## The enumerations, walked both ways
+//
+// This is the check `c const` cannot make. Every arm names a constant clang resolved, so a typo is
+// already impossible — what is still possible is `Add -> c.BLENDMODE_MOD`, which is why each
+// mapping is stated a second time here in the only other form available: as a table of pairs.
 
-// ---- the transcribed constants ----
+@test
+the_event_kinds_are_sdls_own_numbers()
+    assert_eq(EventKind.Quit.code(), c.EVENT_QUIT, "quit")
+    assert_eq(EventKind.WindowShown.code(), c.EVENT_WINDOW_SHOWN, "shown")
+    assert_eq(EventKind.WindowHidden.code(), c.EVENT_WINDOW_HIDDEN, "hidden")
+    assert_eq(EventKind.WindowExposed.code(), c.EVENT_WINDOW_EXPOSED, "exposed")
+    assert_eq(EventKind.WindowMoved.code(), c.EVENT_WINDOW_MOVED, "moved")
+    assert_eq(EventKind.WindowResized.code(), c.EVENT_WINDOW_RESIZED, "resized")
+    assert_eq(EventKind.WindowPixelSizeChanged.code(), c.EVENT_WINDOW_PIXEL_SIZE_CHANGED, "pixels")
+    assert_eq(EventKind.WindowMinimized.code(), c.EVENT_WINDOW_MINIMIZED, "minimized")
+    assert_eq(EventKind.WindowMaximized.code(), c.EVENT_WINDOW_MAXIMIZED, "maximized")
+    assert_eq(EventKind.WindowRestored.code(), c.EVENT_WINDOW_RESTORED, "restored")
+    assert_eq(EventKind.WindowMouseEnter.code(), c.EVENT_WINDOW_MOUSE_ENTER, "mouse in")
+    assert_eq(EventKind.WindowMouseLeave.code(), c.EVENT_WINDOW_MOUSE_LEAVE, "mouse out")
+    assert_eq(EventKind.WindowFocusGained.code(), c.EVENT_WINDOW_FOCUS_GAINED, "focus in")
+    assert_eq(EventKind.WindowFocusLost.code(), c.EVENT_WINDOW_FOCUS_LOST, "focus out")
+    assert_eq(EventKind.WindowCloseRequested.code(), c.EVENT_WINDOW_CLOSE_REQUESTED, "close")
+    assert_eq(EventKind.KeyDown.code(), c.EVENT_KEY_DOWN, "key down")
+    assert_eq(EventKind.KeyUp.code(), c.EVENT_KEY_UP, "key up")
+    assert_eq(EventKind.TextInput.code(), c.EVENT_TEXT_INPUT, "text input")
+    assert_eq(EventKind.TextEditing.code(), c.EVENT_TEXT_EDITING, "text editing")
+    assert_eq(EventKind.MouseMotion.code(), c.EVENT_MOUSE_MOTION, "motion")
+    assert_eq(EventKind.MouseButtonDown.code(), c.EVENT_MOUSE_BUTTON_DOWN, "button down")
+    assert_eq(EventKind.MouseButtonUp.code(), c.EVENT_MOUSE_BUTTON_UP, "button up")
+    assert_eq(EventKind.MouseWheel.code(), c.EVENT_MOUSE_WHEEL, "wheel")
+    assert_eq(EventKind.DropFile.code(), c.EVENT_DROP_FILE, "drop file")
+    assert_eq(EventKind.DropText.code(), c.EVENT_DROP_TEXT, "drop text")
+    assert_eq(EventKind.DropBegin.code(), c.EVENT_DROP_BEGIN, "drop begin")
+    assert_eq(EventKind.DropComplete.code(), c.EVENT_DROP_COMPLETE, "drop complete")
+    assert_eq(EventKind.DropPosition.code(), c.EVENT_DROP_POSITION, "drop position")
+    assert_eq(EventKind.User.code(), c.EVENT_USER, "user")
+
+    // **`TextEditing` is the one this test was written for.** It had been transcribed as `0x304`,
+    // which is `SDL_EVENT_KEYMAP_CHANGED`, so an input method's composition events never matched
+    // anything. Nothing noticed until the C compiler was asked.
+    assert_eq(EventKind.TextEditing.code(), 0x302u32, "composition, not the keymap change after it")
+
+// And back, which is the direction every `poll_event` takes.
+@test
+an_event_kind_comes_back_as_itself()
+    assert_eq(EventKind.of(c.EVENT_QUIT), EventKind.Quit, "quit")
+    assert_eq(EventKind.of(c.EVENT_KEY_DOWN), EventKind.KeyDown, "key down")
+    assert_eq(EventKind.of(c.EVENT_TEXT_INPUT), EventKind.TextInput, "text input")
+    assert_eq(EventKind.of(c.EVENT_TEXT_EDITING), EventKind.TextEditing, "text editing")
+    assert_eq(EventKind.of(c.EVENT_MOUSE_WHEEL), EventKind.MouseWheel, "wheel")
+    assert_eq(EventKind.of(c.EVENT_DROP_POSITION), EventKind.DropPosition, "drop position")
+    assert_eq(EventKind.of(c.EVENT_WINDOW_PIXEL_SIZE_CHANGED), EventKind.WindowPixelSizeChanged,
+        "the pixel size change, which is not the resize beside it")
+    assert_eq(EventKind.of(c.EVENT_USER), EventKind.User, "user")
+
+    // A gamepad axis, which this package does not name. It is an ordinary answer.
+    assert_eq(EventKind.of(0x650u32), EventKind.Other(0x650), "an event with no variant here")
+    assert_eq(EventKind.Other(0x650).code(), 0x650u32, "and it carries its number back out")
+
+@test
+the_mouse_buttons_are_sdls_own_numbers()
+    assert_eq(MouseButton.Left.code(), c.BUTTON_LEFT, "left")
+    assert_eq(MouseButton.Middle.code(), c.BUTTON_MIDDLE, "middle")
+    assert_eq(MouseButton.Right.code(), c.BUTTON_RIGHT, "right")
+    assert_eq(MouseButton.X1.code(), c.BUTTON_X1, "x1")
+    assert_eq(MouseButton.X2.code(), c.BUTTON_X2, "x2")
+
+    assert_eq(MouseButton.of(c.BUTTON_LEFT), MouseButton.Left, "and back")
+    assert_eq(MouseButton.of(c.BUTTON_X2), MouseButton.X2, "and back")
+    assert_eq(MouseButton.of(9), MouseButton.Other(9), "a button with no name")
+
+@test
+the_blend_modes_are_sdls_own_numbers()
+    assert_eq(BlendMode.Off.code(), c.BLENDMODE_NONE, "none")
+    assert_eq(BlendMode.Blend.code(), c.BLENDMODE_BLEND, "blend")
+    assert_eq(BlendMode.Add.code(), c.BLENDMODE_ADD, "add")
+    assert_eq(BlendMode.Mod.code(), c.BLENDMODE_MOD, "mod")
+    assert_eq(BlendMode.Mul.code(), c.BLENDMODE_MUL, "mul")
+
+@test
+the_texture_and_scale_modes_are_sdls_own_numbers()
+    assert_eq(TextureAccess.Static.code(), c.TEXTUREACCESS_STATIC, "static")
+    assert_eq(TextureAccess.Streaming.code(), c.TEXTUREACCESS_STREAMING, "streaming")
+    assert_eq(TextureAccess.Target.code(), c.TEXTUREACCESS_TARGET, "target")
+    assert_eq(TextureAccess.of(c.TEXTUREACCESS_TARGET), TextureAccess.Target, "and back")
+
+    assert_eq(ScaleMode.Nearest.code(), c.SCALEMODE_NEAREST, "nearest")
+    assert_eq(ScaleMode.Linear.code(), c.SCALEMODE_LINEAR, "linear")
+    assert_eq(ScaleMode.PixelArt.code(), c.SCALEMODE_PIXELART, "pixelart")
+    assert_eq(ScaleMode.of(c.SCALEMODE_LINEAR), ScaleMode.Linear, "and back")
+
+@test
+the_colorspaces_and_dialog_kinds_are_sdls_own_numbers()
+    assert_eq(Colorspace.Bt709Limited.code(), c.COLORSPACE_BT709_LIMITED, "bt709")
+    assert_eq(Colorspace.Bt601Limited.code(), c.COLORSPACE_BT601_LIMITED, "bt601")
+    assert_eq(Colorspace.Jpeg.code(), c.COLORSPACE_JPEG, "jpeg")
+
+    assert_eq(FileDialogKind.OpenFile.code(), c.FILEDIALOG_OPENFILE, "open file")
+    assert_eq(FileDialogKind.SaveFile.code(), c.FILEDIALOG_SAVEFILE, "save file")
+    assert_eq(FileDialogKind.OpenFolder.code(), c.FILEDIALOG_OPENFOLDER, "open folder")
+
+// Twenty shapes in one enumeration, in an order that is easy to slip by one.
+@test
+the_system_cursors_are_sdls_own_numbers()
+    assert_eq(SystemCursor.Default.code(), c.SYSTEM_CURSOR_DEFAULT, "default")
+    assert_eq(SystemCursor.Text.code(), c.SYSTEM_CURSOR_TEXT, "text")
+    assert_eq(SystemCursor.Wait.code(), c.SYSTEM_CURSOR_WAIT, "wait")
+    assert_eq(SystemCursor.Crosshair.code(), c.SYSTEM_CURSOR_CROSSHAIR, "crosshair")
+    assert_eq(SystemCursor.Progress.code(), c.SYSTEM_CURSOR_PROGRESS, "progress")
+    assert_eq(SystemCursor.NwseResize.code(), c.SYSTEM_CURSOR_NWSE_RESIZE, "nwse")
+    assert_eq(SystemCursor.NeswResize.code(), c.SYSTEM_CURSOR_NESW_RESIZE, "nesw")
+    assert_eq(SystemCursor.EwResize.code(), c.SYSTEM_CURSOR_EW_RESIZE, "ew")
+    assert_eq(SystemCursor.NsResize.code(), c.SYSTEM_CURSOR_NS_RESIZE, "ns")
+    assert_eq(SystemCursor.Move.code(), c.SYSTEM_CURSOR_MOVE, "move")
+    assert_eq(SystemCursor.NotAllowed.code(), c.SYSTEM_CURSOR_NOT_ALLOWED, "not allowed")
+    assert_eq(SystemCursor.Pointer.code(), c.SYSTEM_CURSOR_POINTER, "pointer")
+    assert_eq(SystemCursor.NwResize.code(), c.SYSTEM_CURSOR_NW_RESIZE, "nw")
+    assert_eq(SystemCursor.NResize.code(), c.SYSTEM_CURSOR_N_RESIZE, "n")
+    assert_eq(SystemCursor.NeResize.code(), c.SYSTEM_CURSOR_NE_RESIZE, "ne")
+    assert_eq(SystemCursor.EResize.code(), c.SYSTEM_CURSOR_E_RESIZE, "e")
+    assert_eq(SystemCursor.SeResize.code(), c.SYSTEM_CURSOR_SE_RESIZE, "se")
+    assert_eq(SystemCursor.SResize.code(), c.SYSTEM_CURSOR_S_RESIZE, "s")
+    assert_eq(SystemCursor.SwResize.code(), c.SYSTEM_CURSOR_SW_RESIZE, "sw")
+    assert_eq(SystemCursor.WResize.code(), c.SYSTEM_CURSOR_W_RESIZE, "w")
+
+// An enumeration that printed its number would be no better than the number, so each says a word.
+@test
+the_enums_print_as_words()
+    assert_eq(f"${EventKind.WindowPixelSizeChanged}", "window pixel size changed", "an event kind")
+    assert_eq(f"${EventKind.Other(0x650)}", "an event this binding does not name", "and an unnamed one")
+    assert_eq(f"${PixelFormat.Argb8888}", "argb8888", "a pixel format")
+    assert_eq(f"${BlendMode.Blend}", "blend", "a blend mode")
+    assert_eq(f"${MouseButton.Right}", "right", "a mouse button")
+    assert_eq(f"${ScaleMode.PixelArt}", "pixelart", "a scale mode")
+    assert_eq(f"${Colorspace.Bt709Limited}", "bt709 limited", "a colorspace")
+    assert_eq(f"${AudioFormat.F32}", "f32", "an audio format")
+    assert_eq(f"${SystemCursor.NwseResize}", "nwse resize", "a cursor shape")
+    assert_eq(f"${FileDialogKind.OpenFolder}", "open folder", "a dialog kind")
+    assert_eq(f"${TextureAccess.Streaming}", "streaming", "a texture access")
+
+// ## The enumerations, put through SDL itself
+//
+// The tables above prove each variant carries the number this package believes it does. These prove
+// the number is the one SDL acts on, which is a different claim and the one that matters.
 
 // SDL names a pixel format from the bits packed into the value itself, so a name coming back right
 // says the whole encoding is right rather than just that the number matches something.
@@ -111,146 +250,174 @@ every_event_view_is_the_size_of_the_union()
 the_pixel_formats_are_the_ones_sdl_names()
     assert(headless(), "SDL_Init")
 
-    assert_eq(format_name(PIXELFORMAT_ARGB8888), "SDL_PIXELFORMAT_ARGB8888", "ARGB8888")
-    assert_eq(format_name(PIXELFORMAT_RGBA8888), "SDL_PIXELFORMAT_RGBA8888", "RGBA8888")
-    assert_eq(format_name(PIXELFORMAT_ABGR8888), "SDL_PIXELFORMAT_ABGR8888", "ABGR8888")
-    assert_eq(format_name(PIXELFORMAT_RGB24), "SDL_PIXELFORMAT_RGB24", "RGB24")
-    assert_eq(format_name(PIXELFORMAT_IYUV), "SDL_PIXELFORMAT_IYUV", "IYUV")
-    assert_eq(format_name(PIXELFORMAT_YV12), "SDL_PIXELFORMAT_YV12", "YV12")
-    assert_eq(format_name(PIXELFORMAT_NV12), "SDL_PIXELFORMAT_NV12", "NV12")
-    assert_eq(format_name(PIXELFORMAT_NV21), "SDL_PIXELFORMAT_NV21", "NV21")
+    assert_eq(PixelFormat.Argb8888.name(), "SDL_PIXELFORMAT_ARGB8888", "ARGB8888")
+    assert_eq(PixelFormat.Rgba8888.name(), "SDL_PIXELFORMAT_RGBA8888", "RGBA8888")
+    assert_eq(PixelFormat.Abgr8888.name(), "SDL_PIXELFORMAT_ABGR8888", "ABGR8888")
+    assert_eq(PixelFormat.Rgb24.name(), "SDL_PIXELFORMAT_RGB24", "RGB24")
+    assert_eq(PixelFormat.Iyuv.name(), "SDL_PIXELFORMAT_IYUV", "IYUV")
+    assert_eq(PixelFormat.Yv12.name(), "SDL_PIXELFORMAT_YV12", "YV12")
+    assert_eq(PixelFormat.Nv12.name(), "SDL_PIXELFORMAT_NV12", "NV12")
+    assert_eq(PixelFormat.Nv21.name(), "SDL_PIXELFORMAT_NV21", "NV21")
+
+    assert(PixelFormat.Iyuv.planar(), "the planar ones know they are planar")
+    assert(!PixelFormat.Argb8888.planar(), "and the packed ones know they are not")
 
     quit()
 
 @test
 the_audio_formats_are_the_ones_sdl_names()
-    assert_eq(from_cstring(sdl_get_audio_format_name(AUDIO_F32)).unwrap_or(""),
-        "SDL_AUDIO_F32LE", "AUDIO_F32 is little-endian float32")
-    assert_eq(from_cstring(sdl_get_audio_format_name(AUDIO_S16)).unwrap_or(""),
-        "SDL_AUDIO_S16LE", "AUDIO_S16 is little-endian signed 16")
+    assert_eq(AudioFormat.F32.name(), "SDL_AUDIO_F32LE", "F32 is little-endian float32")
+    assert_eq(AudioFormat.S16.name(), "SDL_AUDIO_S16LE", "S16 is little-endian signed 16")
 
 // An init flag that named the wrong subsystem would bring up something else and say nothing.
 @test
 the_init_flags_name_the_right_subsystems()
     set_hint(HINT_VIDEO_DRIVER, "dummy")
 
-    assert(init(INIT_VIDEO), "SDL_Init(INIT_VIDEO)")
-    assert(sdl_was_init(INIT_VIDEO) != 0, "video came up")
-    assert(sdl_was_init(INIT_AUDIO) == 0, "and audio did not, which is what makes this a test")
+    assert(init(c.INIT_VIDEO), "SDL_Init(INIT_VIDEO)")
+    assert(was_init(c.INIT_VIDEO) != 0, "video came up")
+    assert(was_init(c.INIT_AUDIO) == 0, "and audio did not, which is what makes this a test")
 
     quit()
 
-// A window flag is a bit in a 64-bit mask, so one transcribed from the wrong line asks for a
-// different property entirely. SDL reports what it actually granted.
+// A window flag is a bit in a 64-bit mask, so one taken from the wrong line asks for a different
+// property entirely. SDL reports what it actually granted.
+//
+// **This is where `ALWAYS_ON_TOP` was wrong.** It had been written down as `0x8000`, which is
+// `SDL_WINDOW_MOUSE_RELATIVE_MODE` — so a window asking to stay above the others had the pointer
+// hidden and warped instead, and every flag test still passed because it was asserting against the
+// same wrong number.
 @test
 the_window_flags_are_the_ones_sdl_reports()
     assert(headless(), "SDL_Init")
 
-    val flags = WINDOW_RESIZABLE | WINDOW_HIDDEN | WINDOW_BORDERLESS
+    val flags = c.WINDOW_RESIZABLE | c.WINDOW_HIDDEN | c.WINDOW_BORDERLESS
     val w = create_window("flags", 64, 48, flags).expect("the window opened")
-    val got = sdl_get_window_flags(w.handle)
+    val got = w.flags()
 
-    assert((got & WINDOW_RESIZABLE) != 0, "resizable")
-    assert((got & WINDOW_HIDDEN) != 0, "hidden")
-    assert((got & WINDOW_BORDERLESS) != 0, "borderless")
-    assert((got & WINDOW_FULLSCREEN) == 0, "and not fullscreen, which nothing asked for")
+    assert((got & c.WINDOW_RESIZABLE) != 0, "resizable")
+    assert((got & c.WINDOW_HIDDEN) != 0, "hidden")
+    assert((got & c.WINDOW_BORDERLESS) != 0, "borderless")
+    assert((got & c.WINDOW_FULLSCREEN) == 0, "and not fullscreen, which nothing asked for")
+    assert((got & c.WINDOW_ALWAYS_ON_TOP) == 0, "nor above the others")
+    assert_eq(c.WINDOW_ALWAYS_ON_TOP, 0x10000u64, "which is bit sixteen, not bit fifteen")
 
-    w.destroy()
-    quit()
-
-// A scale mode is an enumeration constant, so the check is a round trip through SDL's own storage.
+// A scale mode round trips through SDL's own storage, which is what says the constant reached it.
 @test
 the_scale_modes_round_trip()
     assert(headless(), "SDL_Init")
 
-    val w = create_window("scale", 32, 32, WINDOW_HIDDEN).expect("the window opened")
+    val w = create_window("scale", 32, 32, c.WINDOW_HIDDEN).expect("the window opened")
     val r = w.create_renderer().expect("the renderer opened")
-    val made = r.create_texture(PIXELFORMAT_ARGB8888, TEXTUREACCESS_STREAMING, 16, 16)
+    val made = r.create_texture(PixelFormat.Argb8888, TextureAccess.Streaming, 16, 16)
     val t = made.expect("the texture was made")
 
-    var mode: i32 = -1
+    assert(t.set_scale_mode(ScaleMode.Nearest), "set nearest")
+    assert_eq(t.scale_mode(), ScaleMode.Nearest, "nearest survived")
 
-    assert(t.set_scale_mode(SCALEMODE_NEAREST), "set nearest")
-    assert(sdl_get_texture_scale_mode(t.handle, &mode), "read it back")
-    assert_eq(mode, SCALEMODE_NEAREST, "nearest survived")
+    assert(t.set_scale_mode(ScaleMode.Linear), "set linear")
+    assert_eq(t.scale_mode(), ScaleMode.Linear, "linear survived")
 
-    assert(t.set_scale_mode(SCALEMODE_LINEAR), "set linear")
-    assert(sdl_get_texture_scale_mode(t.handle, &mode), "read it back")
-    assert_eq(mode, SCALEMODE_LINEAR, "linear survived")
+    assert_eq(t.access(), TextureAccess.Streaming, "and it is the access it was made with")
+    assert_eq(t.format(), PixelFormat.Argb8888, "and the format")
 
-    t.destroy()
-    r.destroy()
-    w.destroy()
-    quit()
-
-// **The colorspace is the constant whose being wrong is quietest of all** — a YUV texture created
-// with the SD value decodes HD footage to shifted greens and reds, with no error anywhere. SDL
-// stores what it was given in the texture's own property bag, so it can be read back.
+// **The colorspace is the value whose being wrong is quietest of all** — a YUV texture created with
+// the SD value decodes HD footage to shifted greens and reds, with no error anywhere. SDL stores
+// what it was given in the texture's own property bag, so it can be read back.
 @test
 a_colorspace_survives_into_the_texture()
     assert(headless(), "SDL_Init")
 
-    val w = create_window("yuv", 32, 32, WINDOW_HIDDEN).expect("the window opened")
+    val w = create_window("yuv", 32, 32, c.WINDOW_HIDDEN).expect("the window opened")
     val r = w.create_renderer().expect("the renderer opened")
-    val made = r.create_yuv_texture(PIXELFORMAT_IYUV, TEXTUREACCESS_STREAMING, 16, 16,
-        COLORSPACE_BT709_LIMITED)
+    val made = r.create_yuv_texture(PixelFormat.Iyuv, TextureAccess.Streaming, 16, 16,
+        Colorspace.Bt709Limited)
     val t = made.expect("the YUV texture was made")
 
-    val props = sdl_get_texture_properties(t.handle)
-    val name = cstring("SDL.texture.colorspace")
-    val got = sdl_get_number_property(props, name.ptr, -1)
+    val props = c.get_texture_properties(t.handle)
+    val got = number_property(props, "SDL.texture.colorspace", -1)
 
-    assert_eq(got, i64(COLORSPACE_BT709_LIMITED), "BT.709 limited is what the texture carries")
+    assert_eq(got, i64(Colorspace.Bt709Limited.code()), "BT.709 limited is what the texture carries")
+    assert(got != i64(Colorspace.Bt601Limited.code()), "and not the default it would have had")
 
-    t.destroy()
-    r.destroy()
-    w.destroy()
-    quit()
+// **A blend mode that reached the library, measured rather than asserted.** A half-alpha fill over
+// a known background is the background where blending is off and halfway between where it is on, so
+// a `code` naming the wrong constant paints a different pixel — which nothing else here would
+// notice.
+@test
+a_blend_mode_changes_what_is_painted()
+    assert(headless(), "SDL_Init")
+
+    val w = create_window("blend", 32, 32, c.WINDOW_HIDDEN).expect("the window opened")
+    val r = w.create_renderer().expect("the renderer opened")
+
+    assert(r.clear_to(rgb(0, 0, 0)), "a black background")
+    assert(r.set_blend_mode(BlendMode.Off), "blending off")
+    assert(r.set_draw_color(rgba(255, 255, 255, 128)), "half-transparent white")
+    assert(r.fill_rect(0.0, 0.0, 8.0, 8.0), "filled")
+
+    val opaque = r.read_pixels().expect("read back").read_pixel(2, 2).expect("a pixel")
+
+    assert_eq(opaque.r, 255u8, "with blending off the alpha is ignored and white replaces black")
+
+    assert(r.clear_to(rgb(0, 0, 0)), "a black background again")
+    assert(r.set_blend_mode(BlendMode.Blend), "blending on")
+    assert(r.set_draw_color(rgba(255, 255, 255, 128)), "the same half-transparent white")
+    assert(r.fill_rect(0.0, 0.0, 8.0, 8.0), "filled")
+
+    val blended = r.read_pixels().expect("read back").read_pixel(2, 2).expect("a pixel")
+
+    assert(blended.r > 100u8 && blended.r < 160u8, "with it on the result is about halfway")
 
 // A scancode is a USB HID usage id and SDL knows the name of each. A number copied off the wrong
-// row names a different key.
+// row names a different key. These live in `c`, so this is a check on the header rather than on a
+// mapping — kept because it is the one place the *keyboard* half of the package is exercised at all.
 @test
 the_scancodes_are_the_keys_they_say()
     assert(headless(), "SDL_Init")
 
-    assert_eq(scancode_name(SCANCODE_A), "A", "A")
-    assert_eq(scancode_name(SCANCODE_Z), "Z", "Z")
-    assert_eq(scancode_name(SCANCODE_1), "1", "1")
-    assert_eq(scancode_name(SCANCODE_ESCAPE), "Escape", "Escape")
-    assert_eq(scancode_name(SCANCODE_SPACE), "Space", "Space")
-    assert_eq(scancode_name(SCANCODE_LEFT), "Left", "Left")
-    assert_eq(scancode_name(SCANCODE_F1), "F1", "F1")
-    assert_eq(scancode_name(SCANCODE_F12), "F12", "F12")
-    assert_eq(scancode_name(SCANCODE_KP_ENTER), "Keypad Enter", "the keypad enter")
-    assert_eq(scancode_name(SCANCODE_LSHIFT), "Left Shift", "left shift")
-    assert_eq(scancode_name(SCANCODE_RGUI), "Right GUI", "right GUI, the last of them")
+    assert_eq(scancode_name(c.SCANCODE_A), "A", "A")
+    assert_eq(scancode_name(c.SCANCODE_Z), "Z", "Z")
+    assert_eq(scancode_name(c.SCANCODE_1), "1", "1")
+    assert_eq(scancode_name(c.SCANCODE_ESCAPE), "Escape", "Escape")
+    assert_eq(scancode_name(c.SCANCODE_SPACE), "Space", "Space")
+    assert_eq(scancode_name(c.SCANCODE_LEFT), "Left", "Left")
+    assert_eq(scancode_name(c.SCANCODE_F1), "F1", "F1")
+    assert_eq(scancode_name(c.SCANCODE_F12), "F12", "F12")
+    assert_eq(scancode_name(c.SCANCODE_KP_ENTER), "Keypad Enter", "the keypad enter")
+    assert_eq(scancode_name(c.SCANCODE_LSHIFT), "Left Shift", "left shift")
+    assert_eq(scancode_name(c.SCANCODE_RGUI), "Right GUI", "right GUI, the last of them")
+
+    // SDL's own name for this one is `SDL_SCANCODE_NUMLOCKCLEAR`, which is the single place in the
+    // whole table where the readable name here and the header's do not agree.
+    assert_eq(scancode_name(c.SCANCODE_NUMLOCK), "Numlock", "and the num lock")
 
     quit()
 
 // A keycode is the other half — the logical key, whose value for anything non-printable is the
-// scancode with SDL's mask set. Getting the mask wrong makes every one of them nameless.
+// scancode with SDL's mask set.
 @test
 the_keycodes_are_the_keys_they_say()
     assert(headless(), "SDL_Init")
 
-    assert_eq(key_name(KEY_RETURN), "Return", "Return")
-    assert_eq(key_name(KEY_ESCAPE), "Escape", "Escape")
-    assert_eq(key_name(KEY_SPACE), "Space", "Space")
-    assert_eq(key_name(KEY_LEFT), "Left", "Left")
-    assert_eq(key_name(KEY_F1), "F1", "F1")
-    assert_eq(key_name(KEY_F12), "F12", "F12")
-    assert_eq(key_name(KEY_PAGEDOWN), "PageDown", "PageDown")
+    assert_eq(key_name(c.KEY_RETURN), "Return", "Return")
+    assert_eq(key_name(c.KEY_ESCAPE), "Escape", "Escape")
+    assert_eq(key_name(c.KEY_SPACE), "Space", "Space")
+    assert_eq(key_name(c.KEY_LEFT), "Left", "Left")
+    assert_eq(key_name(c.KEY_F1), "F1", "F1")
+    assert_eq(key_name(c.KEY_F12), "F12", "F12")
+    assert_eq(key_name(c.KEY_PAGEDOWN), "PageDown", "PageDown")
 
     // And the two halves agree: the layout maps the physical key to the logical one.
-    assert_eq(key_from_scancode(SCANCODE_F1), KEY_F1, "F1's scancode maps to F1's keycode")
-    assert_eq(key_from_scancode(SCANCODE_RETURN), KEY_RETURN, "and Return to Return")
+    assert_eq(key_from_scancode(c.SCANCODE_F1), c.KEY_F1, "F1's scancode maps to F1's keycode")
+    assert_eq(key_from_scancode(c.SCANCODE_RETURN), c.KEY_RETURN, "and Return to Return")
 
     quit()
 
-// ---- events ----
+// ## Events
 
-// An event type that was mistranscribed would simply never match, which no compiler notices. This
-// pushes one and gets it back.
+// An event type that was wrong would simply never match, which no compiler notices. This pushes one
+// and gets it back.
 @test
 an_event_round_trips_through_the_queue()
     assert(headless(), "SDL_Init")
@@ -262,7 +429,7 @@ an_event_round_trips_through_the_queue()
     while true
         poll_event() match
             Some(e) ->
-                if e.kind == EVENT_USER
+                if e.kind() == EventKind.User
                     assert_eq(e.user_code(), 4242i32, "the code came back through the union")
                     seen = true
             None -> break
@@ -276,68 +443,69 @@ an_event_round_trips_through_the_queue()
 // nonsense at run time. This is the test that stands in for the header nobody reads.
 @test
 every_variant_reads_its_own_fields()
-    var k = KeyboardEvent(EVENT_KEY_DOWN, 0, 77, 3, 0, SCANCODE_A, KEY_RETURN, KMOD_LSHIFT, 0,
-        true, true, [0; 90])
-    val kp: *Event = ptr_cast(&k)
-    val ke = kp[0]
+    var k = c.KeyboardEvent(c.EVENT_KEY_DOWN, 0, 77, 3, 0, c.SCANCODE_A, c.KEY_RETURN,
+        c.KMOD_LSHIFT, 0, true, true, [0; 90])
+    val kp: *c.Event = ptr_cast(&k)
+    val ke = Event(kp[0])
 
-    assert_eq(ke.kind, EVENT_KEY_DOWN, "the kind is the first word of every event")
-    assert_eq(ke.timestamp, 77u64, "and the timestamp the second")
+    assert_eq(ke.kind(), EventKind.KeyDown, "the kind is the first word of every event")
+    assert_eq(ke.timestamp(), 77u64, "and the timestamp the second")
     assert_eq(ke.window_id(), 3u32, "the window id sits where every windowed variant has it")
-    assert_eq(ke.key_scancode(), SCANCODE_A, "the scancode")
-    assert_eq(ke.key_code(), KEY_RETURN, "the keycode")
-    assert_eq(ke.key_mod(), KMOD_LSHIFT, "the modifier mask")
+    assert_eq(ke.key_scancode(), c.SCANCODE_A, "the scancode")
+    assert_eq(ke.key_code(), c.KEY_RETURN, "the keycode")
+    assert_eq(ke.key_mod(), c.KMOD_LSHIFT, "the modifier mask")
     assert(ke.key_repeat(), "and the repeat flag, which is the last byte before the padding")
 
-    var m = MouseMotionEvent(EVENT_MOUSE_MOTION, 0, 0, 3, 0, 0, 12.5, 34.25, 1.0, 2.0, [0; 84])
-    val mp: *Event = ptr_cast(&m)
-    val me = mp[0]
+    var m = c.MouseMotionEvent(c.EVENT_MOUSE_MOTION, 0, 0, 3, 0, 0, 12.5, 34.25, 1.0, 2.0, [0; 84])
+    val mp: *c.Event = ptr_cast(&m)
+    val me = Event(mp[0])
 
     assert_eq(me.mouse_x(), 12.5f32, "the motion x")
     assert_eq(me.mouse_y(), 34.25f32, "the motion y")
 
-    var b = MouseButtonEvent(EVENT_MOUSE_BUTTON_DOWN, 0, 0, 3, 0, BUTTON_RIGHT, true, 2, 0,
+    var b = c.MouseButtonEvent(c.EVENT_MOUSE_BUTTON_DOWN, 0, 0, 3, 0, c.BUTTON_RIGHT, true, 2, 0,
         5.0, 6.0, [0; 88])
-    val bp: *Event = ptr_cast(&b)
-    val be = bp[0]
+    val bp: *c.Event = ptr_cast(&b)
+    val be = Event(bp[0])
 
-    assert_eq(be.mouse_button(), BUTTON_RIGHT, "which button")
+    assert_eq(be.mouse_button(), MouseButton.Right, "which button")
     assert_eq(be.mouse_clicks(), 2u8, "and how many clicks")
     assert_eq(be.mouse_x(), 5.0f32, "a button event carries its position at the motion offsets")
     assert_eq(be.mouse_y(), 6.0f32, "on both axes")
 
-    var w = MouseWheelEvent(EVENT_MOUSE_WHEEL, 0, 0, 3, 0, -1.0, 3.0, 0, 0.0, 0.0, [0; 84])
-    val wp: *Event = ptr_cast(&w)
-    val we = wp[0]
+    var w = c.MouseWheelEvent(c.EVENT_MOUSE_WHEEL, 0, 0, 3, 0, -1.0, 3.0, 0, 0.0, 0.0, [0; 84])
+    val wp: *c.Event = ptr_cast(&w)
+    val we = Event(wp[0])
 
     assert_eq(we.wheel_x(), -1.0f32, "the wheel x")
     assert_eq(we.wheel_y(), 3.0f32, "and the wheel y, which is positive away from the user")
 
-    var d = DropEvent(EVENT_DROP_FILE, 0, 0, 3, 8.0, 9.0, 0, null, null, [0; 80])
-    val dp: *Event = ptr_cast(&d)
-    val de = dp[0]
+    var d = c.DropEvent(c.EVENT_DROP_FILE, 0, 0, 3, 8.0, 9.0, 0, null, null, [0; 80])
+    val dp: *c.Event = ptr_cast(&d)
+    val de = Event(dp[0])
 
     assert_eq(de.drop_x(), 8.0f32, "the drop point x")
     assert_eq(de.drop_y(), 9.0f32, "and y")
     assert_eq(de.drop_data(), "", "a null payload reads as empty rather than trapping")
     assert_eq(de.drop_source(), "", "and so does a null source")
 
-    var n = WindowEvent(EVENT_WINDOW_RESIZED, 0, 0, 3, 640, 480, [0; 100])
-    val np: *Event = ptr_cast(&n)
-    val ne = np[0]
+    var n = c.WindowEvent(c.EVENT_WINDOW_RESIZED, 0, 0, 3, 640, 480, [0; 100])
+    val np: *c.Event = ptr_cast(&n)
+    val ne = Event(np[0])
 
-    assert_eq(ne.window_data1(), 640i32, "a resize carries its new width in data1")
+    assert_eq(ne.kind(), EventKind.WindowResized, "a resize is a resize")
+    assert_eq(ne.window_data1(), 640i32, "and carries its new width in data1")
     assert_eq(ne.window_data2(), 480i32, "and its height in data2")
 
     val ue = user_event(4242)
 
-    assert_eq(ue.kind, EVENT_USER, "a user event is a user event")
+    assert_eq(ue.kind(), EventKind.User, "a user event is a user event")
     assert_eq(ue.user_code(), 4242i32, "carrying the code it was built with")
 
-    var t = TextEvent(EVENT_TEXT_INPUT, 0, 0, 3, 0, null, [0; 96])
-    val tp: *Event = ptr_cast(&t)
+    var t = c.TextEvent(c.EVENT_TEXT_INPUT, 0, 0, 3, 0, null, [0; 96])
+    val tp: *c.Event = ptr_cast(&t)
 
-    assert_eq(tp[0].text(), "", "and a null text pointer reads as empty")
+    assert_eq(Event(tp[0]).text(), "", "and a null text pointer reads as empty")
 
 // Somewhere for a watch to write. **A closure captures a plain local by *copy*** (`12 §7`), so a
 // watch that counted into a `var int` beside it would count into its own field and the caller would
@@ -355,7 +523,7 @@ an_event_watch_reaches_a_closure()
     assert(headless(), "SDL_Init")
 
     val t: &Tally = Tally(buf())
-    val id = add_event_watch(e -> if e.kind == EVENT_USER then t.seen.push(e.user_code()))
+    val id = add_event_watch(e -> if e.kind() == EventKind.User then t.seen.push(e.user_code()))
 
     assert(push_event(user_event(11)), "the first push")
     assert(push_event(user_event(22)), "the second")
@@ -378,8 +546,8 @@ two_watches_are_told_apart()
 
     val a: &Tally = Tally(buf())
     val b: &Tally = Tally(buf())
-    val ia = add_event_watch(e -> if e.kind == EVENT_USER then a.seen.push(e.user_code()))
-    val ib = add_event_watch(e -> if e.kind == EVENT_USER then b.seen.push(e.user_code()))
+    val ia = add_event_watch(e -> if e.kind() == EventKind.User then a.seen.push(e.user_code()))
+    val ib = add_event_watch(e -> if e.kind() == EventKind.User then b.seen.push(e.user_code()))
 
     assert(push_event(user_event(1)), "pushed")
     assert_eq(a.seen.len(), 1usize, "the first watch saw it")
@@ -393,61 +561,53 @@ two_watches_are_told_apart()
     remove_event_watch(ib)
     quit()
 
-// ---- surfaces and textures ----
+// ## Surfaces and textures
 
 @test
 a_surface_reads_its_own_fields()
     assert(headless(), "SDL_Init")
 
-    val s = create_surface(16, 8, PIXELFORMAT_ARGB8888).expect("the surface was made")
+    val s = create_surface(16, 8, PixelFormat.Argb8888).expect("the surface was made")
 
     assert_eq(s.width(), 16i32, "the width")
     assert_eq(s.height(), 8i32, "the height")
     assert(s.pitch() >= 64, "and a pitch of at least four bytes a pixel")
     assert(s.pixels() != null, "and it points at pixels")
+    assert_eq(s.format(), PixelFormat.Argb8888, "and it is the format it was asked for")
 
     // The pitch is where getting `flags` wrong shows up: a `u64` there shifts every later field and
     // the pitch comes back narrower than the width.
     assert(s.pitch() >= s.width(), "the pitch is at least the width, which the layout decides")
 
-    assert(sdl_write_surface_pixel(s.handle, 3, 4, 10, 20, 30, 255), "wrote a pixel")
+    assert(s.write_pixel(3, 4, rgb(10, 20, 30)), "wrote a pixel")
 
-    val c = s.read_pixel(3, 4).expect("read it back")
+    val col = s.read_pixel(3, 4).expect("read it back")
 
-    assert_eq(c.r, 10u8, "red")
-    assert_eq(c.g, 20u8, "green")
-    assert_eq(c.b, 30u8, "blue")
-    assert_eq(c.a, 255u8, "and opaque")
-
-    s.destroy()
-    quit()
+    assert_eq(col.r, 10u8, "red")
+    assert_eq(col.g, 20u8, "green")
+    assert_eq(col.b, 30u8, "blue")
+    assert_eq(col.a, 255u8, "and opaque")
 
 @test
 a_surface_uploads_to_a_texture()
     assert(headless(), "SDL_Init")
 
-    val w = create_window("upload", 32, 32, WINDOW_HIDDEN).expect("the window opened")
+    val w = create_window("upload", 32, 32, c.WINDOW_HIDDEN).expect("the window opened")
     val r = w.create_renderer().expect("the renderer opened")
-    val s = create_surface(16, 8, PIXELFORMAT_ARGB8888).expect("the surface was made")
+    val s = create_surface(16, 8, PixelFormat.Argb8888).expect("the surface was made")
     val t = r.create_texture_from_surface(s).expect("the texture was made")
     val (tw, th) = t.size()
 
     assert_eq(tw, 16.0f32, "the texture kept the surface's width")
     assert_eq(th, 8.0f32, "and its height")
 
-    s.destroy()
-    t.destroy()
-    r.destroy()
-    w.destroy()
-    quit()
-
-// ---- drawing ----
+// ## Drawing
 
 @test
 a_renderer_draws_a_frame()
     assert(headless(), "SDL_Init")
 
-    val w = create_window("draw", 64, 48, WINDOW_HIDDEN).expect("the window opened")
+    val w = create_window("draw", 64, 48, c.WINDOW_HIDDEN).expect("the window opened")
     val r = w.create_renderer().expect("the renderer opened")
 
     assert(r.clear_to(BLACK), "cleared")
@@ -465,10 +625,6 @@ a_renderer_draws_a_frame()
     assert_eq(ow, 64i32, "the output is the window's width")
     assert_eq(oh, 48i32, "and its height")
 
-    r.destroy()
-    w.destroy()
-    quit()
-
 // Reading the target back is the only way a test can see that a drawing call put the colour where
 // it said it would — everything above asserts that a call *succeeded*. So this one draws two known
 // colours and asks for them by coordinate.
@@ -476,7 +632,7 @@ a_renderer_draws_a_frame()
 a_renderer_reads_its_pixels_back()
     assert(headless(), "SDL_Init")
 
-    val w = create_window("readback", 64, 48, WINDOW_HIDDEN).expect("the window opened")
+    val w = create_window("readback", 64, 48, c.WINDOW_HIDDEN).expect("the window opened")
     val r = w.create_renderer().expect("the renderer opened")
 
     assert(r.clear_to(rgb(10, 20, 30)), "cleared to a background")
@@ -500,43 +656,64 @@ a_renderer_reads_its_pixels_back()
 
     // A rectangle reads back only that rectangle, and its (0, 0) is the rectangle's corner rather
     // than the target's — which is the whole of what the second form is for.
-    val part = r.read_pixels_rect(Rect(8, 8, 4, 4)).expect("part of the target read back")
+    val part = r.read_pixels_rect(rect(8, 8, 4, 4)).expect("part of the target read back")
 
     assert_eq(part.width(), 4i32, "the part is the rectangle's width")
     assert_eq(part.height(), 4i32, "and its height")
     assert_eq(part.read_pixel(0, 0).expect("its corner").r, 200u8, "which starts at the rectangle")
 
-    part.destroy()
-    shot.destroy()
-    r.destroy()
-    w.destroy()
-    quit()
-
 @test
 a_renderer_draws_into_a_texture()
     assert(headless(), "SDL_Init")
 
-    val w = create_window("target", 32, 32, WINDOW_HIDDEN).expect("the window opened")
+    val w = create_window("target", 32, 32, c.WINDOW_HIDDEN).expect("the window opened")
     val r = w.create_renderer().expect("the renderer opened")
-    val made = r.create_texture(PIXELFORMAT_ARGB8888, TEXTUREACCESS_TARGET, 16, 16)
+    val made = r.create_texture(PixelFormat.Argb8888, TextureAccess.Target, 16, 16)
     val t = made.expect("the target texture was made")
 
     assert(r.set_target(t), "drew into the texture")
     assert(r.clear_to(WHITE), "cleared it")
     assert(r.reset_target(), "and back to the window")
-    assert(t.set_blend_mode(BLENDMODE_BLEND), "set a blend mode")
+    assert(t.set_blend_mode(BlendMode.Blend), "set a blend mode")
     assert(t.set_alpha_mod(128), "and an alpha")
     assert(r.copy(t), "blitted it whole")
     assert(r.copy_at(t, 4.0, 4.0), "and at a point")
-    assert(r.copy_to(t, FRect(0.0, 0.0, 32.0, 32.0)), "and scaled")
-    assert(r.copy_part(t, FRect(0.0, 0.0, 8.0, 8.0), FRect(8.0, 8.0, 16.0, 16.0)), "and a part of it")
+    assert(r.copy_to(t, frect(0.0, 0.0, 32.0, 32.0)), "and scaled")
+    assert(r.copy_part(t, frect(0.0, 0.0, 8.0, 8.0), frect(8.0, 8.0, 16.0, 16.0)), "and a part")
 
-    t.destroy()
-    r.destroy()
-    w.destroy()
-    quit()
+// ## Cursors
+//
+// The ownership split is the whole subject: what this program made is a `&Cursor` with a
+// destructor, and what SDL lends is a `BorrowedCursor` with no way to free it. The second is a
+// type rather than a comment, which is the only form of that warning a compiler can read.
 
-// ---- the geometry builders ----
+@test
+a_cursor_is_lent_by_sdl_and_never_freed_here()
+    assert(headless(), "SDL_Init")
+
+    // **The borrowed half is the half that matters**, and it is the one the dummy driver supports.
+    // SDL lends its current and default cursors; a `BorrowedCursor` is the only thing that can hold
+    // one and it has no destructor at all. Under a single type with an `impl Drop`, this test would
+    // be freeing SDL's own default cursor every time it ran.
+    val current = current_cursor().expect("something is set")
+    val fallback = default_cursor().expect("and the platform has a default")
+
+    assert(current.set(), "a lent cursor can still be made active")
+    assert(fallback.set(), "and so can the platform's own")
+
+    // The owned half needs a real video driver — the dummy one answers "CreateSystemCursor is not
+    // currently supported" — so this takes whichever answer the platform gives.
+    create_system_cursor(SystemCursor.Text) match
+        Some(beam) -> assert(beam.set(), "a cursor this program made is set, and freed by its Drop")
+        None -> assert(error().len > 0, "or the driver says why it will not make one")
+
+    assert(cursor_visible(), "the pointer starts visible")
+    assert(hide_cursor(), "hide it")
+    assert(!cursor_visible(), "and it is hidden")
+    assert(show_cursor(), "show it again")
+    assert(cursor_visible(), "and it is back")
+
+// ## The geometry builders
 //
 // These need no renderer, which is the point of their being separate from the drawing calls: the
 // arithmetic is the only part that can be wrong, and it can be checked exactly.
@@ -544,7 +721,7 @@ a_renderer_draws_into_a_texture()
 @test
 a_circle_is_a_fan()
     val segs = circle_segments(20.0)
-    var verts: Buf[Vertex] = buf()
+    var verts: Buf[c.Vertex] = buf()
     var idx: Buf[i32] = buf()
 
     build_circle(&verts, &idx, 100.0, 50.0, 20.0, rgb(255, 0, 0), segs)
@@ -568,7 +745,7 @@ the_segment_count_is_bounded()
 
 @test
 a_thick_line_is_a_quad()
-    var verts: Buf[Vertex] = buf()
+    var verts: Buf[c.Vertex] = buf()
     var idx: Buf[i32] = buf()
 
     assert(build_thick_line(&verts, &idx, 0.0, 0.0, 10.0, 0.0, 4.0, rgb(0, 0, 255)), "it built")
@@ -583,21 +760,21 @@ a_thick_line_is_a_quad()
 
 @test
 a_zero_length_thick_line_draws_nothing()
-    var verts: Buf[Vertex] = buf()
+    var verts: Buf[c.Vertex] = buf()
     var idx: Buf[i32] = buf()
 
     assert(!build_thick_line(&verts, &idx, 5.0, 5.0, 5.0, 5.0, 4.0, WHITE), "a point has no normal")
     assert_eq(verts.len(), 0usize, "and nothing was built")
 
-// ---- colour ----
+// ## Colour
 
 @test
 a_colour_is_bytes_and_fractions()
-    val c = rgb(255, 128, 0)
+    val col = rgb(255, 128, 0)
 
-    assert_eq(c.a, 255u8, "rgb is opaque")
-    assert_eq(c.rf, 1.0f32, "full red is one")
-    assert_eq(c.bf, 0.0f32, "no blue is zero")
+    assert_eq(col.a, 255u8, "rgb is opaque")
+    assert_eq(col.rf, 1.0f32, "full red is one")
+    assert_eq(col.bf, 0.0f32, "no blue is zero")
     assert_eq(color_from_rgb(0xff8000).r, 255u8, "packed red")
     assert_eq(color_from_rgb(0xff8000).g, 128u8, "packed green")
     assert_eq(color_from_rgb(0xff8000).b, 0u8, "packed blue")
@@ -610,13 +787,13 @@ a_blend_is_clamped_at_both_ends()
     assert_eq(blend(BLACK, WHITE, -3.0).r, 0u8, "below zero clamps")
     assert_eq(blend(BLACK, WHITE, 9.0).r, 255u8, "and above one clamps")
 
-// ---- windows ----
+// ## Windows
 
 @test
 a_window_reports_what_it_was_asked_for()
     assert(headless(), "SDL_Init")
 
-    val w = create_window("title", 100, 60, WINDOW_HIDDEN).expect("the window opened")
+    val w = create_window("title", 100, 60, c.WINDOW_HIDDEN).expect("the window opened")
     val (ww, wh) = w.size()
 
     assert_eq(ww, 100i32, "the width it was created with")
@@ -635,10 +812,7 @@ a_window_reports_what_it_was_asked_for()
     assert(ph >= nh, "on both axes")
     assert(w.id() != 0, "and the window has an id events can carry")
 
-    w.destroy()
-    quit()
-
-// ---- clipboard ----
+// ## Clipboard
 
 @test
 the_clipboard_round_trips()
@@ -667,7 +841,7 @@ the_locales_are_readable()
 
     quit()
 
-// ---- audio ----
+// ## Audio
 
 // SDL's dummy audio backend accepts a device and consumes what is pushed at it, so the whole queue
 // path runs on a machine with no sound card.
@@ -691,11 +865,7 @@ an_audio_stream_takes_samples()
     assert(s.pause(), "paused")
     assert(s.resume(), "resumed")
 
-    s.destroy()
-    quit_audio()
-    quit()
-
-// ---- file dialogs ----
+// ## File dialogs
 
 // The callback's tally, in module storage rather than captured, so that the two dialog tests count
 // the same thing and a closure body stays one line.

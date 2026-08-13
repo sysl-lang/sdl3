@@ -1,6 +1,7 @@
 module sh.sysl.sdl3
-@link("SDL3")
 
+import sh.sysl.sdl3.c
+import sh.sysl.sdl3.c.DialogFileFilter
 import sysl.text.{CString, cstring, from_cstring}
 import sysl.slices.as_ptr
 import sysl.buf.{Buf, buf}
@@ -25,6 +26,28 @@ import sysl.buf.{Buf, buf}
 // slot as it runs. That is the same shape the event watches use and the same shape the Scala
 // binding to this library uses, for the same reason: a `*extern` cannot capture.
 
+// Which panel to put up.
+enum FileDialogKind
+    OpenFile
+    SaveFile
+    OpenFolder
+
+    code(self) -> i32
+        self match
+            OpenFile -> c.FILEDIALOG_OPENFILE
+            SaveFile -> c.FILEDIALOG_SAVEFILE
+            OpenFolder -> c.FILEDIALOG_OPENFOLDER
+end FileDialogKind
+
+impl Display for FileDialogKind
+    display(self, out: *Writer, fmt: FormatSpec)
+        val s = self match
+            OpenFile -> "open file"
+            SaveFile -> "save file"
+            OpenFolder -> "open folder"
+
+        display_str(s, out, fmt)
+
 // What the user did. Cancelling is a normal outcome and a distinct one from failing — SDL reports
 // them differently and so does this.
 enum DialogResult
@@ -48,20 +71,11 @@ struct FileFilter
     name: string
     pattern: string
 
-// `SDL_DialogFileFilter` — two pointers, which is what SDL reads the array as.
-struct CFilter
-    name: *u8
-    pattern: *u8
-
-extern "SDL_ShowFileDialogWithProperties" sdl_show_file_dialog(kind: i32,
-                                                               callback: *extern(*u8, **u8, i32) -> unit,
-                                                               userdata: *u8, props: u32)
-
 // One dialog that is up. Everything here exists to outlive `show_file_dialog`.
 struct Pending
     slot: i32
     callback: &Fn(DialogResult) -> unit
-    filters: []CFilter
+    filters: []DialogFileFilter
     strings: Buf[CString]
 
 // The words SDL is handed as `userdata`. They are module storage, so their addresses are stable for
@@ -71,7 +85,7 @@ private var slot_words: [16]i32 = [0; 16]
 private var slot_taken: [16]bool = [false; 16]
 private var pending: Buf[Pending] = buf()
 
-private var no_filters: []CFilter = [CFilter(null, null); 0]
+private var no_filters: []DialogFileFilter = [DialogFileFilter(null, null); 0]
 
 // The one function pointer SDL ever holds for a dialog.
 //
@@ -125,16 +139,16 @@ end take_slot
 
 // Show a system file dialog and deliver the outcome to `callback`.
 //
-// `kind` is one of `FILEDIALOG_OPENFILE`, `FILEDIALOG_SAVEFILE` or `FILEDIALOG_OPENFOLDER`; the
-// three wrappers below name them. Everything after `window` is a hint a platform may ignore:
-// `location` is a directory if it ends in a separator and otherwise a directory plus a pre-filled
-// name, and `title`, `accept` and `cancel` are the panel's labels.
+// The three wrappers below name the kinds. Everything after `window` is a hint a platform may
+// ignore: `location` is a directory if it ends in a separator and otherwise a directory plus a
+// pre-filled name, and `title`, `accept` and `cancel` are the panel's labels.
 //
 // The callback runs once and is then forgotten. Up to sixteen dialogs may be up at a time; `false`
 // means there was no slot left, and the callback will not run.
-show_file_dialog(kind: i32, callback: &Fn(DialogResult) -> unit, window: Option[Window] = None,
-                 filters: []FileFilter = [], location: string = "", many: bool = false,
-                 title: string = "", accept: string = "", cancel: string = "") -> bool
+show_file_dialog(kind: FileDialogKind, callback: &Fn(DialogResult) -> unit,
+                 window: Option[&Window] = None, filters: []FileFilter = [], location: string = "",
+                 many: bool = false, title: string = "", accept: string = "",
+                 cancel: string = "") -> bool
     val slot = take_slot()
 
     if slot < 0 then return false
@@ -142,13 +156,14 @@ show_file_dialog(kind: i32, callback: &Fn(DialogResult) -> unit, window: Option[
     // The filter strings are held as `CString`s for as long as the dialog is, because SDL does
     // **not** copy the array — it keeps the pointer and reads it when the panel opens.
     var strings: Buf[CString] = buf()
-    var cfilters: []CFilter = if filters.len == 0 then no_filters else [CFilter(null, null); filters.len]
+    val empty = DialogFileFilter(null, null)
+    var cfilters: []DialogFileFilter = if filters.len == 0 then no_filters else [empty; filters.len]
 
     for i in 0..<filters.len
         val n = cstring(filters[i].name)
         val p = cstring(filters[i].pattern)
 
-        cfilters[i] = CFilter(n.ptr, p.ptr)
+        cfilters[i] = DialogFileFilter(n.ptr, p.ptr)
         strings.push(n)
         strings.push(p)
 
@@ -161,7 +176,7 @@ show_file_dialog(kind: i32, callback: &Fn(DialogResult) -> unit, window: Option[
         set_number_property(props, "SDL.filedialog.nfilters", i64(filters.len))
 
     window match
-        Some(w) -> set_pointer_property(props, "SDL.filedialog.window", w.handle)
+        Some(w) -> set_pointer_property(props, "SDL.filedialog.window", ptr_cast(w.handle))
         None -> ()
 
     if location != "" then set_string_property(props, "SDL.filedialog.location", location)
@@ -170,7 +185,8 @@ show_file_dialog(kind: i32, callback: &Fn(DialogResult) -> unit, window: Option[
     if accept != "" then set_string_property(props, "SDL.filedialog.accept", accept)
     if cancel != "" then set_string_property(props, "SDL.filedialog.cancel", cancel)
 
-    sdl_show_file_dialog(kind, &dialog_trampoline, ptr_cast(&slot_words[usize(slot)]), props)
+    c.show_file_dialog_with_properties(kind.code(), &dialog_trampoline,
+        ptr_cast(&slot_words[usize(slot)]), props)
 
     // The properties are read synchronously — SDL's own convenience wrappers destroy the set the
     // moment this returns — so the bag goes here while the filters array it points at does not.
@@ -179,23 +195,23 @@ show_file_dialog(kind: i32, callback: &Fn(DialogResult) -> unit, window: Option[
 end show_file_dialog
 
 // Ask the user to pick an existing file, or several with `many`.
-show_open_file_dialog(callback: &Fn(DialogResult) -> unit, window: Option[Window] = None,
+show_open_file_dialog(callback: &Fn(DialogResult) -> unit, window: Option[&Window] = None,
                       filters: []FileFilter = [], location: string = "", many: bool = false,
                       title: string = "", accept: string = "", cancel: string = "") -> bool =
-    show_file_dialog(FILEDIALOG_OPENFILE, callback, window, filters, location, many, title, accept, cancel)
+    show_file_dialog(OpenFile, callback, window, filters, location, many, title, accept, cancel)
 
 // Ask the user to name a file to write. The path need not exist, and the panel does the "already
 // exists — overwrite?" prompt itself.
-show_save_file_dialog(callback: &Fn(DialogResult) -> unit, window: Option[Window] = None,
+show_save_file_dialog(callback: &Fn(DialogResult) -> unit, window: Option[&Window] = None,
                       filters: []FileFilter = [], location: string = "",
                       title: string = "", accept: string = "", cancel: string = "") -> bool =
-    show_file_dialog(FILEDIALOG_SAVEFILE, callback, window, filters, location, false, title, accept, cancel)
+    show_file_dialog(SaveFile, callback, window, filters, location, false, title, accept, cancel)
 
 // Ask the user to pick a folder. Filters do not apply.
-show_open_folder_dialog(callback: &Fn(DialogResult) -> unit, window: Option[Window] = None,
+show_open_folder_dialog(callback: &Fn(DialogResult) -> unit, window: Option[&Window] = None,
                         location: string = "", many: bool = false,
                         title: string = "", accept: string = "", cancel: string = "") -> bool =
-    show_file_dialog(FILEDIALOG_OPENFOLDER, callback, window, [], location, many, title, accept, cancel)
+    show_file_dialog(OpenFolder, callback, window, [], location, many, title, accept, cancel)
 
 // How many dialogs are up. Zero after every callback has run, which is the "nothing was stranded"
 // invariant `tests.sysl` checks.

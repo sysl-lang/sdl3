@@ -1,6 +1,7 @@
 module sh.sysl.sdl3
-@link("SDL3")
 
+import sh.sysl.sdl3.c
+import sh.sysl.sdl3.c.INIT_VIDEO
 import sysl.text.{cstring, from_cstring}
 
 // SDL3 — a window, a renderer, an event queue, input and audio.
@@ -11,81 +12,53 @@ import sysl.text.{cstring, from_cstring}
 // carrying it would be maintaining a port. So SDL3 is installed separately and the two flags naming
 // its prefix are part of every build here — `package.hocon` says why that is deliberate.
 //
-// **There is no shim either, which is the interesting half.** `regex` needed one because three
-// things in `<regex.h>` are reachable from C and from nothing else: a struct whose size only the
-// header knows, a `#define`, and a layout that had to be copied out. SDL3 has none of those
-// problems in the surface bound here:
+// **It is two layers.** `sh.sysl.sdl3.c` holds everything that is C — the link directive, the
+// headers, the `c const` blocks that ask the C compiler for SDL's numbers, the opaque handles and
+// the hundred and thirty declarations. This module is what an application imports, and its job is
+// to be pleasant rather than faithful: a handle owns what it points at and frees it when the last
+// reference goes, a failure is an `Option` rather than a null, and a value out of an enumeration is
+// a variant with a name rather than a number.
 //
-//   - **Every handle is an opaque pointer** that SDL allocates and SDL frees, so this side never
-//     needs to know a size. `SDL_Window`, `SDL_Renderer`, `SDL_Texture`, `SDL_Cursor` and
-//     `SDL_AudioStream` are all `*u8` behind a one-field struct.
-//   - **`SDL_Surface` is public and ABI-stable in SDL3**, so its fields are read directly as a
-//     `*Surface` rather than copied out by C. That is a change from SDL2, where it was opaque.
-//   - **The constants are `#define`s with no symbol**, so they are transcribed — and that is the one
-//     hand-copied thing in the package. `tests.sysl` pins the values that would be silently wrong
-//     against what C computes, the way `rp2350` checks addresses against the datasheet.
-//   - **`SDL_Color` crosses by value**, which sysl does correctly. The Scala binding to the same
-//     library packs it into a `uint32` by hand because Scala Native mis-marshals a small by-value
-//     struct; nothing of the sort is needed here, and `tests.sysl` proves it by reading back a
-//     rendered pixel.
+// **A consumer may reach into `c` and that is fine** — SDL's masks and scancodes live there, since
+// they are SDL's own numbers and there is nothing for this layer to improve about them:
 //
-// **A call that fails answers `false` or a null handle, and the reason is in `error()`.** That is
-// SDL's convention and it is kept rather than translated into `Result`: a binding that invented a
-// richer answer than the library gives would be inventing the failure cases too.
+//     import sh.sysl.sdl3.*
+//     import sh.sysl.sdl3.c.{WINDOW_RESIZABLE, SCANCODE_ESCAPE}
+//
+// **`SDL_Surface` is public and ABI-stable in SDL3**, so its fields are read straight out of SDL's
+// storage rather than copied out by a shim. That is a change from SDL2, where it was opaque, and it
+// is half of why this package needs no C of its own.
+//
+// **A call that fails answers `false` or nothing, and the reason is in `error()`.** That is SDL's
+// convention and it is kept rather than translated into `Result`: a binding that invented a richer
+// answer than the library gives would be inventing the failure cases too.
 
-// ---- lifecycle ----
-
-extern "SDL_Init" sdl_init(flags: u32) -> bool
-extern "SDL_InitSubSystem" sdl_init_subsystem(flags: u32) -> bool
-extern "SDL_QuitSubSystem" sdl_quit_subsystem(flags: u32)
-extern "SDL_Quit" sdl_quit()
-extern "SDL_SetMainReady" sdl_set_main_ready()
-extern "SDL_GetError" sdl_get_error() -> *u8
-extern "SDL_Delay" sdl_delay(ms: u32)
-extern "SDL_DelayNS" sdl_delay_ns(ns: u64)
-extern "SDL_DelayPrecise" sdl_delay_precise(ns: u64)
-extern "SDL_GetTicks" sdl_get_ticks() -> u64
-extern "SDL_GetTicksNS" sdl_get_ticks_ns() -> u64
-extern "SDL_GetPerformanceCounter" sdl_get_performance_counter() -> u64
-extern "SDL_GetPerformanceFrequency" sdl_get_performance_frequency() -> u64
-extern "SDL_SetHint" sdl_set_hint(name: *u8, value: *u8) -> bool
-extern "SDL_ResetHint" sdl_reset_hint(name: *u8) -> bool
-extern "SDL_IsMainThread" sdl_is_main_thread() -> bool
-extern "SDL_free" sdl_free(mem: *u8)
+// ## Lifecycle
 
 // Tell SDL the program supplies its own `main`, which a sysl program always does — there is no
 // place for SDL's main shim to sit. Call it before `init`.
-set_main_ready() = sdl_set_main_ready()
+set_main_ready() = c.set_main_ready()
 
-// Bring up the named subsystems; `false` on failure, with the reason in `error`.
-init(flags: u32 = INIT_VIDEO) -> bool = sdl_init(flags)
+// Bring up the named subsystems; `false` on failure, with the reason in `error`. `flags` is a mask
+// of `c`'s `INIT_*` values.
+init(flags: u32 = INIT_VIDEO) -> bool = c.init(flags)
 
 // Bring up a subsystem after `init` has already run — audio is independent of video, so a program
 // that opens a window first and decides about sound later asks for it here.
-init_subsystem(flags: u32) -> bool = sdl_init_subsystem(flags)
+init_subsystem(flags: u32) -> bool = c.init_sub_system(flags)
 
-quit_subsystem(flags: u32) = sdl_quit_subsystem(flags)
+quit_subsystem(flags: u32) = c.quit_sub_system(flags)
 
-quit() = sdl_quit()
+quit() = c.quit()
+
+// Which of the asked-for subsystems are up, as the same mask. Zero for none of them.
+was_init(flags: u32) -> u32 = c.was_init(flags)
 
 // What went wrong with the last call that said so. SDL owns the storage and reuses it, so the text
 // is copied out here rather than pointed at.
-error() -> string = from_cstring(sdl_get_error()).unwrap_or("")
+error() -> string = from_cstring(c.get_error()).unwrap_or("")
 
-// Sleep for at least this many milliseconds. The floor is the platform's timer granularity, so a
-// frame loop that wants a rate should measure rather than count delays — `ticks` below is what it
-// measures with.
-delay(ms: u32) = sdl_delay(ms)
-
-// The same in nanoseconds, and the same caveat: the sleep is *at least* this long.
-delay_ns(ns: u64) = sdl_delay_ns(ns)
-
-// A sleep that spins out the last of the interval rather than handing the whole of it to the
-// scheduler. Accurate to well under a millisecond and it costs a core while it waits, which is the
-// trade — it is for pacing a frame, not for idling.
-delay_precise(ns: u64) = sdl_delay_precise(ns)
-
-// ---- the clock ----
+// ## The clock
 //
 // **This is the only clock a sysl program has**, since the language itself has no time source, and
 // it is a monotonic one: it counts from `init` and cannot go backwards or jump when somebody
@@ -93,19 +66,34 @@ delay_precise(ns: u64) = sdl_delay_precise(ns)
 // how long the last frame took, and how long since something happened — and useless for the date,
 // which SDL does not answer either.
 
+// Sleep for at least this many milliseconds. The floor is the platform's timer granularity, so a
+// frame loop that wants a rate should measure rather than count delays — `ticks` below is what it
+// measures with.
+delay(ms: u32) = c.delay(ms)
+
+// The same in nanoseconds, and the same caveat: the sleep is *at least* this long.
+delay_ns(ns: u64) = c.delay_ns(ns)
+
+// A sleep that spins out the last of the interval rather than handing the whole of it to the
+// scheduler. Accurate to well under a millisecond and it costs a core while it waits, which is the
+// trade — it is for pacing a frame, not for idling.
+delay_precise(ns: u64) = c.delay_precise(ns)
+
 // Milliseconds since `init`.
-ticks() -> u64 = sdl_get_ticks()
+ticks() -> u64 = c.get_ticks()
 
 // The same in nanoseconds, which is what a frame time wants: at 120 Hz a frame is eight
 // milliseconds, so a millisecond clock measures it to one part in eight.
-ticks_ns() -> u64 = sdl_get_ticks_ns()
+ticks_ns() -> u64 = c.get_ticks_ns()
 
 // The raw counter behind both, and the ticks per second to divide it by. `ticks_ns` is this pair
 // already divided; reach for the counter itself only where the division would lose something —
 // timing a run of a few microseconds, or accumulating a total without rounding at every step.
-performance_counter() -> u64 = sdl_get_performance_counter()
+performance_counter() -> u64 = c.get_performance_counter()
 
-performance_frequency() -> u64 = sdl_get_performance_frequency()
+performance_frequency() -> u64 = c.get_performance_frequency()
+
+// ## Hints
 
 // Set a configuration hint. Most are read when the thing they configure is created, so a hint set
 // after the window exists may do nothing.
@@ -113,27 +101,46 @@ set_hint(name: string, value: string) -> bool
     val n = cstring(name)
     val v = cstring(value)
 
-    sdl_set_hint(n.ptr, v.ptr)
+    c.set_hint(n.ptr, v.ptr)
+end set_hint
 
 // Return a hint to its default, as though `set_hint` had never been called for it. Not the same as
 // setting it to `""`, which is a value like any other.
 reset_hint(name: string) -> bool
     val n = cstring(name)
 
-    sdl_reset_hint(n.ptr)
+    c.reset_hint(n.ptr)
+end reset_hint
 
 // Whether the caller is on the thread SDL was initialised on — the only one that may create a
 // window, touch a renderer, or pump events. Worth asserting at the head of anything a worker thread
 // has to hand off rather than do itself.
-is_main_thread() -> bool = sdl_is_main_thread()
+is_main_thread() -> bool = c.is_main_thread()
 
-// ---- colour ----
+// A hint's name is a string rather than a number, so these are the one group of SDL's constants
+// `c const` cannot answer for — `15 §7` refuses a string from C deliberately, since it would have
+// to be written with two quotings for one value.
+val HINT_RENDER_VSYNC: string = "SDL_RENDER_VSYNC"
+val HINT_RENDER_DRIVER: string = "SDL_RENDER_DRIVER"
+val HINT_VIDEO_DRIVER: string = "SDL_VIDEO_DRIVER"
+
+// Selects a file-dialog backend by name. Only Linux has more than one to choose between — "portal"
+// and "zenity"; every other platform has exactly one and **fails the dialog** if this is set to
+// anything at all. That makes it the way to exercise a dialog's whole path — filters, properties,
+// callback — with no panel appearing, which is what `tests.sysl` uses it for.
+val HINT_FILE_DIALOG_DRIVER: string = "SDL_FILE_DIALOG_DRIVER"
+
+// ## Colour
 
 // An RGBA colour, one byte per channel.
 //
 // This is `SDL_Color`, laid out to agree with C's, and it crosses **by value** — which is what the
 // text binding's render calls take. `tests.sysl` checks both the size and that the channels arrive
 // in the right order after a round trip through a real render.
+//
+// It is declared here rather than in `c` because nothing in *this* package's C surface takes one:
+// `SDL_SetRenderDrawColor` takes four bytes. The companion packages that do take an `SDL_Color`
+// name this one.
 struct Color
     r: u8
     g: u8

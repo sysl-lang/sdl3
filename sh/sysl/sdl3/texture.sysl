@@ -1,61 +1,295 @@
 module sh.sysl.sdl3
-@link("SDL3")
 
-import sysl.text.cstring
+import sh.sysl.sdl3.c
+import sh.sysl.sdl3.c.Rect
+import sysl.text.{cstring, from_cstring}
 
-// Textures, surfaces, and the property bag a few calls take their settings in.
+// Textures, surfaces, the pixel formats they are in, and the property bag a few calls take their
+// settings in.
+//
+// **The five enumerations here replace forty-two transcribed numbers.** Each `code` and each `of`
+// is a `match` against what the C compiler read out of SDL's headers, so a value can no longer be
+// wrong on this side without the other side saying so — and `print(s.format())` says
+// `argb8888` rather than `372645892`.
 
-extern "SDL_CreateTexture" sdl_create_texture(renderer: *u8, format: u32, access: i32, w: i32, h: i32) -> *u8
-extern "SDL_CreateTextureFromSurface" sdl_create_texture_from_surface(renderer: *u8, surface: *u8) -> *u8
-extern "SDL_CreateTextureWithProperties" sdl_create_texture_with_properties(renderer: *u8, props: u32) -> *u8
-extern "SDL_UpdateTexture" sdl_update_texture(texture: *u8, rect: *Rect, pixels: *u8, pitch: i32) -> bool
-extern "SDL_DestroyTexture" sdl_destroy_texture(texture: *u8)
-extern "SDL_SetTextureScaleMode" sdl_set_texture_scale_mode(texture: *u8, mode: i32) -> bool
-extern "SDL_SetTextureBlendMode" sdl_set_texture_blend_mode(texture: *u8, mode: u32) -> bool
-extern "SDL_SetTextureAlphaMod" sdl_set_texture_alpha_mod(texture: *u8, alpha: u8) -> bool
-extern "SDL_SetTextureColorMod" sdl_set_texture_color_mod(texture: *u8, r: u8, g: u8, b: u8) -> bool
-extern "SDL_GetTextureSize" sdl_get_texture_size(texture: *u8, w: *f32, h: *f32) -> bool
-extern "SDL_UpdateYUVTexture" sdl_update_yuv_texture(texture: *u8, rect: *Rect,
-                                                     y: *u8, y_pitch: i32,
-                                                     u: *u8, u_pitch: i32,
-                                                     v: *u8, v_pitch: i32) -> bool
-extern "SDL_UpdateNVTexture" sdl_update_nv_texture(texture: *u8, rect: *Rect,
-                                                   y: *u8, y_pitch: i32,
-                                                   uv: *u8, uv_pitch: i32) -> bool
+// ## Pixel formats
 
-extern "SDL_DestroySurface" sdl_destroy_surface(surface: *u8)
-extern "SDL_CreateSurface" sdl_create_surface(w: i32, h: i32, format: u32) -> *u8
-extern "SDL_ReadSurfacePixel" sdl_read_surface_pixel(surface: *u8, x: i32, y: i32,
-                                                     r: *u8, g: *u8, b: *u8, a: *u8) -> bool
+// How the pixels of a surface or a texture are laid out.
+//
+// SDL has some fifty of these and this names the ones a program reaches for; anything else comes
+// back as `Other`, which is a real answer rather than a failure — `Surface.format` on a surface the
+// text binding produced is quite likely to be one.
+enum PixelFormat
+    // 32-bit packed ARGB, eight bits per channel. On a little-endian host the bytes lie B, G, R, A —
+    // byte for byte what a Cairo `ARGB32` image surface holds — so such a buffer uploads straight
+    // into a streaming texture of this format.
+    Argb8888
+    Rgba8888
+    Abgr8888
+    Rgb24
 
-extern "SDL_CreateProperties" sdl_create_properties() -> u32
-extern "SDL_DestroyProperties" sdl_destroy_properties(props: u32)
-extern "SDL_SetNumberProperty" sdl_set_number_property(props: u32, name: *u8, value: i64) -> bool
-extern "SDL_SetStringProperty" sdl_set_string_property(props: u32, name: *u8, value: *u8) -> bool
-extern "SDL_SetPointerProperty" sdl_set_pointer_property(props: u32, name: *u8, value: *u8) -> bool
-extern "SDL_SetBooleanProperty" sdl_set_boolean_property(props: u32, name: *u8, value: bool) -> bool
+    // Planar Y + U + V, three planes — libavcodec's `AV_PIX_FMT_YUV420P`, the usual output of an
+    // H.264/HEVC decode, and what `Texture.update_yuv` expects. Chroma is half resolution on both
+    // axes, so the U and V planes are `(width / 2) x (height / 2)`.
+    Iyuv
 
-// ---- properties ----
+    // IYUV with the chroma planes swapped.
+    Yv12
+
+    // Planar Y + interleaved U/V, two planes. What hardware decoders hand back; feed it with
+    // `Texture.update_nv`.
+    Nv12
+
+    // NV12 with the chroma order swapped.
+    Nv21
+
+    Other(code: u32)
+
+    code(self) -> u32
+        self match
+            Argb8888 -> c.PIXELFORMAT_ARGB8888
+            Rgba8888 -> c.PIXELFORMAT_RGBA8888
+            Abgr8888 -> c.PIXELFORMAT_ABGR8888
+            Rgb24 -> c.PIXELFORMAT_RGB24
+            Iyuv -> c.PIXELFORMAT_IYUV
+            Yv12 -> c.PIXELFORMAT_YV12
+            Nv12 -> c.PIXELFORMAT_NV12
+            Nv21 -> c.PIXELFORMAT_NV21
+            Other(n) -> n
+
+    of(code: u32) -> PixelFormat
+        code match
+            c.PIXELFORMAT_ARGB8888 -> Argb8888
+            c.PIXELFORMAT_RGBA8888 -> Rgba8888
+            c.PIXELFORMAT_ABGR8888 -> Abgr8888
+            c.PIXELFORMAT_RGB24 -> Rgb24
+            c.PIXELFORMAT_IYUV -> Iyuv
+            c.PIXELFORMAT_YV12 -> Yv12
+            c.PIXELFORMAT_NV12 -> Nv12
+            c.PIXELFORMAT_NV21 -> Nv21
+            n -> Other(n)
+
+    // Whether this is one of the planar formats, which are the ones `update_yuv` and `update_nv`
+    // apply to and the ones that need a colorspace at creation.
+    planar(self) -> bool =
+        self match
+            Iyuv -> true
+            Yv12 -> true
+            Nv12 -> true
+            Nv21 -> true
+            _ -> false
+
+    // SDL's own name for it — which is how an `Other` says what it is.
+    name(self) -> string = from_cstring(c.get_pixel_format_name(self.code())).unwrap_or("")
+end PixelFormat
+
+impl Eq for PixelFormat
+    eq(self, other: PixelFormat) -> bool = self.code() == other.code()
+
+impl Display for PixelFormat
+    display(self, out: *Writer, fmt: FormatSpec)
+        val s = self match
+            Argb8888 -> "argb8888"
+            Rgba8888 -> "rgba8888"
+            Abgr8888 -> "abgr8888"
+            Rgb24 -> "rgb24"
+            Iyuv -> "iyuv"
+            Yv12 -> "yv12"
+            Nv12 -> "nv12"
+            Nv21 -> "nv21"
+            Other(_) -> self.name()
+
+        display_str(s, out, fmt)
+
+// ## Colorspaces
+
+// The colour a YUV texture's planes are to be read as. Settable only at creation, through
+// `Renderer.create_yuv_texture`.
+//
+// **SDL defaults such a texture to `Bt601Limited`**, so HD footage created without an explicit
+// colorspace decodes to visibly wrong colour — greens and reds shifted — which is a quiet wrong
+// answer rather than an error. Match what the file declares.
+enum Colorspace
+    // BT.709, limited (studio) range — the colorspace of essentially all HD video.
+    Bt709Limited
+
+    // BT.601, limited range — SD video, and SDL's default for YUV when nothing says.
+    Bt601Limited
+
+    // Full-range YUV, as produced by JPEG and by some camera and screen-capture sources.
+    Jpeg
+
+    code(self) -> u32
+        self match
+            Bt709Limited -> c.COLORSPACE_BT709_LIMITED
+            Bt601Limited -> c.COLORSPACE_BT601_LIMITED
+            Jpeg -> c.COLORSPACE_JPEG
+end Colorspace
+
+impl Display for Colorspace
+    display(self, out: *Writer, fmt: FormatSpec)
+        val s = self match
+            Bt709Limited -> "bt709 limited"
+            Bt601Limited -> "bt601 limited"
+            Jpeg -> "jpeg full range"
+
+        display_str(s, out, fmt)
+
+// ## Blend modes
+
+// How what is drawn combines with what is already there.
+//
+// **A texture starts at `Off`, which *replaces* rather than composites** — a UI layer drawn over
+// content beneath it has to be set to `Blend` for its alpha to mean anything.
+enum BlendMode
+    // No blending: the source replaces the destination, alpha and all.
+    Off
+
+    // The usual alpha compositing, `dst = src * a + dst * (1 - a)`.
+    Blend
+
+    // Additive, which is what a glow or a spark is drawn with.
+    Add
+
+    // Colour modulation, `dst = src * dst`.
+    Mod
+
+    // Colour multiplication with the destination's alpha kept.
+    Mul
+
+    code(self) -> u32
+        self match
+            Off -> c.BLENDMODE_NONE
+            Blend -> c.BLENDMODE_BLEND
+            Add -> c.BLENDMODE_ADD
+            Mod -> c.BLENDMODE_MOD
+            Mul -> c.BLENDMODE_MUL
+end BlendMode
+
+impl Display for BlendMode
+    display(self, out: *Writer, fmt: FormatSpec)
+        val s = self match
+            Off -> "none"
+            Blend -> "blend"
+            Add -> "add"
+            Mod -> "mod"
+            Mul -> "mul"
+
+        display_str(s, out, fmt)
+
+// ## Texture access and scaling
+
+// What a texture is for, which decides how it may be written and whether it may be drawn into.
+enum TextureAccess
+    // Uploaded rarely, with `update`.
+    Static
+
+    // Re-uploaded often — a video frame, or a CPU rasterizer's output.
+    Streaming
+
+    // A texture the renderer can draw into, with `Renderer.set_target`.
+    Target
+
+    Other(code: i32)
+
+    code(self) -> i32
+        self match
+            Static -> c.TEXTUREACCESS_STATIC
+            Streaming -> c.TEXTUREACCESS_STREAMING
+            Target -> c.TEXTUREACCESS_TARGET
+            Other(n) -> n
+
+    of(code: i32) -> TextureAccess
+        code match
+            c.TEXTUREACCESS_STATIC -> Static
+            c.TEXTUREACCESS_STREAMING -> Streaming
+            c.TEXTUREACCESS_TARGET -> Target
+            n -> Other(n)
+end TextureAccess
+
+impl Eq for TextureAccess
+    eq(self, other: TextureAccess) -> bool = self.code() == other.code()
+
+impl Display for TextureAccess
+    display(self, out: *Writer, fmt: FormatSpec)
+        val s = self match
+            Static -> "static"
+            Streaming -> "streaming"
+            Target -> "target"
+            Other(_) -> "an unknown access"
+
+        display_str(s, out, fmt)
+
+// How a texture is filtered when it is drawn at a size other than its own.
+enum ScaleMode
+    // Point sampling — what pixel art wants at an integer scale.
+    Nearest
+
+    // Bilinear, the default.
+    Linear
+
+    // SDL3's own pixel-art filter, which keeps edges hard at a non-integer scale where `Nearest`
+    // would make them uneven.
+    PixelArt
+
+    Other(code: i32)
+
+    code(self) -> i32
+        self match
+            Nearest -> c.SCALEMODE_NEAREST
+            Linear -> c.SCALEMODE_LINEAR
+            PixelArt -> c.SCALEMODE_PIXELART
+            Other(n) -> n
+
+    of(code: i32) -> ScaleMode
+        code match
+            c.SCALEMODE_NEAREST -> Nearest
+            c.SCALEMODE_LINEAR -> Linear
+            c.SCALEMODE_PIXELART -> PixelArt
+            n -> Other(n)
+end ScaleMode
+
+impl Eq for ScaleMode
+    eq(self, other: ScaleMode) -> bool = self.code() == other.code()
+
+impl Display for ScaleMode
+    display(self, out: *Writer, fmt: FormatSpec)
+        val s = self match
+            Nearest -> "nearest"
+            Linear -> "linear"
+            PixelArt -> "pixelart"
+            Other(_) -> "an unknown scale mode"
+
+        display_str(s, out, fmt)
+
+// ## Properties
 //
 // A typed key/value bag. It is here because two things in SDL can only be said at creation and have
 // no parameter for it: a texture's colorspace, and everything a file dialog is configured with.
 
-create_properties() -> u32 = sdl_create_properties()
+create_properties() -> u32 = c.create_properties()
 
-destroy_properties(props: u32) = sdl_destroy_properties(props)
+destroy_properties(props: u32) = c.destroy_properties(props)
 
 set_number_property(props: u32, name: string, value: i64) -> bool
     val n = cstring(name)
 
-    sdl_set_number_property(props, n.ptr, value)
+    c.set_number_property(props, n.ptr, value)
 end set_number_property
+
+// What a numeric property holds, or `default` where the bag has no such key.
+number_property(props: u32, name: string, default: i64 = 0) -> i64
+    val n = cstring(name)
+
+    c.get_number_property(props, n.ptr, default)
+end number_property
 
 // SDL copies a string property's value, so the source may go as soon as this returns.
 set_string_property(props: u32, name: string, value: string) -> bool
     val n = cstring(name)
     val v = cstring(value)
 
-    sdl_set_string_property(props, n.ptr, v.ptr)
+    c.set_string_property(props, n.ptr, v.ptr)
 end set_string_property
 
 // A pointer property is stored as it stands and is **not** copied, so whatever it points at has to
@@ -63,143 +297,152 @@ end set_string_property
 set_pointer_property(props: u32, name: string, value: *u8) -> bool
     val n = cstring(name)
 
-    sdl_set_pointer_property(props, n.ptr, value)
+    c.set_pointer_property(props, n.ptr, value)
 end set_pointer_property
 
 set_boolean_property(props: u32, name: string, value: bool) -> bool
     val n = cstring(name)
 
-    sdl_set_boolean_property(props, n.ptr, value)
+    c.set_boolean_property(props, n.ptr, value)
 end set_boolean_property
 
-// ---- surfaces ----
-
-// The public part of `SDL_Surface`.
-//
-// **SDL3 made this struct public and ABI-stable**, which is why there is no shim in this package
-// for it — the fields are read straight out of SDL's own storage. It was opaque in SDL2, and the
-// Scala binding to this library still treats it as a bare pointer with two hand-written offsets.
-//
-// `flags` is a `Uint32` and getting that wrong shifts every field after it, which shows up as a
-// pitch narrower than the width rather than as anything that mentions layout. `tests.sysl` checks
-// the size against C's.
-struct SurfaceRec
-    flags: u32
-    format: i32
-    w: i32
-    h: i32
-    pitch: i32
-    pixels: *u8
-    refcount: i32
-    reserved: *u8
+// ## Surfaces
 
 // A CPU-side pixel buffer — what the text binding renders into and the image binding decodes into,
 // and what `Renderer.create_texture_from_surface` uploads to the GPU.
+//
+// **The fields are read through a pointer to SDL's own storage**, which is what makes this a view
+// rather than a copy: `SDL_Surface` is public and ABI-stable in SDL3, so `c.Surface` declares its
+// layout and the accessors below read it directly. There is no shim and no hand-written offset.
 struct Surface
-    handle: *u8
+    handle: *c.Surface
 
-    // The fields are read through a pointer to SDL's own storage, which is what makes this handle
-    // a view rather than a copy. It is private because it answers a pointer: the accessors below
-    // read through it and hand back values, which is the only safe shape for a caller.
-    private rec(self) -> *SurfaceRec = ptr_cast(self.handle)
+    width(&self) -> i32 = self.handle.w
 
-    width(self) -> i32 = self.rec().w
-
-    height(self) -> i32 = self.rec().h
+    height(&self) -> i32 = self.handle.h
 
     // Bytes per row, which is not `width * bytes_per_pixel`: a surface's rows are padded for
     // alignment, so anything walking the pixels steps by this.
-    pitch(self) -> i32 = self.rec().pitch
+    pitch(&self) -> i32 = self.handle.pitch
 
-    pixels(self) -> *u8 = self.rec().pixels
+    pixels(&self) -> *u8 = self.handle.pixels
 
-    // The surface's pixel format, one of the `PIXELFORMAT_*` values. Worth asking because it is not
-    // always the one requested: SDL_ttf's solid and shaded renders answer an 8-bit palettized
-    // surface, and its blended one a 32-bit ARGB.
-    format(self) -> u32 = u32(self.rec().format)
+    // The surface's pixel format. Worth asking because it is not always the one requested: SDL_ttf's
+    // solid and shaded renders answer an 8-bit palettized surface, and its blended one a 32-bit
+    // ARGB.
+    format(&self) -> PixelFormat = PixelFormat.of(u32(self.handle.format))
 
     // One pixel's channels, with whatever conversion the surface's format needs. Slow per pixel —
     // it is for a test or a colour picker, not for a scan.
-    read_pixel(self, x: i32, y: i32) -> Option[Color]
+    read_pixel(&self, x: i32, y: i32) -> Option[Color]
         var r: u8 = 0
         var g: u8 = 0
         var b: u8 = 0
         var a: u8 = 0
 
-        if sdl_read_surface_pixel(self.handle, x, y, &r, &g, &b, &a) then
+        if c.read_surface_pixel(self.handle, x, y, &r, &g, &b, &a) then
             Some(Color(r, g, b, a))
         else
             None
     end read_pixel
 
-    destroy(self) = sdl_destroy_surface(self.handle)
+    // Write one pixel, converted into whatever the surface's format is. The same caveat: it is a
+    // per-pixel call, so it is for building a small fixture rather than for filling an image.
+    write_pixel(&self, x: i32, y: i32, col: Color) -> bool =
+        c.write_surface_pixel(self.handle, x, y, col.r, col.g, col.b, col.a)
 end Surface
 
+// The surface goes when the last reference to it does — including the one a failed decode never
+// handed out, since a constructor that answers `None` allocated nothing.
+impl Drop for Surface
+    drop(self) = c.destroy_surface(self.handle)
+
 // An empty surface of a given size and pixel format.
-create_surface(w: i32, h: i32, format: u32) -> Option[Surface]
-    val s = sdl_create_surface(w, h, format)
+create_surface(w: i32, h: i32, format: PixelFormat) -> Option[&Surface]
+    val s = c.create_surface(w, h, format.code())
 
     if s == null then None else Some(Surface(s))
 end create_surface
 
-// ---- textures ----
+// ## Textures
 
 // A GPU-side image, made from a renderer.
 struct Texture
-    handle: *u8
+    handle: *c.Texture
 
-    set_scale_mode(self, mode: i32) -> bool = sdl_set_texture_scale_mode(self.handle, mode)
+    set_scale_mode(&self, mode: ScaleMode) -> bool =
+        c.set_texture_scale_mode(self.handle, mode.code())
+
+    scale_mode(&self) -> ScaleMode
+        var m: i32 = 0
+
+        c.get_texture_scale_mode(self.handle, &m)
+        ScaleMode.of(m)
+    end scale_mode
 
     // How this texture's pixels combine with what is already in the target. A texture starts at
-    // `BLENDMODE_NONE`, which *replaces* rather than composites — a UI layer drawn over content
-    // beneath it has to be set to `BLENDMODE_BLEND` for its alpha to mean anything.
-    set_blend_mode(self, mode: u32) -> bool = sdl_set_texture_blend_mode(self.handle, mode)
+    // `BlendMode.Off`, which *replaces* rather than composites.
+    set_blend_mode(&self, mode: BlendMode) -> bool =
+        c.set_texture_blend_mode(self.handle, mode.code())
 
     // Scale the whole texture's alpha as it is drawn — what a fade is written with.
-    set_alpha_mod(self, alpha: u8) -> bool = sdl_set_texture_alpha_mod(self.handle, alpha)
+    set_alpha_mod(&self, alpha: u8) -> bool = c.set_texture_alpha_mod(self.handle, alpha)
 
     // Tint: each channel is multiplied by this as the texture is drawn.
-    set_color_mod(self, r: u8, g: u8, b: u8) -> bool = sdl_set_texture_color_mod(self.handle, r, g, b)
+    set_color_mod(&self, r: u8, g: u8, b: u8) -> bool =
+        c.set_texture_color_mod(self.handle, r, g, b)
 
     // `(width, height)` in pixels. SDL answers in floats; a texture's size is whole pixels, so this
     // narrows.
-    size(self) -> (f32, f32)
+    size(&self) -> (f32, f32)
         var w: f32 = 0.0
         var h: f32 = 0.0
 
-        sdl_get_texture_size(self.handle, &w, &h)
+        c.get_texture_size(self.handle, &w, &h)
         (w, h)
     end size
+
+    // What it was created as — read back out of SDL's own property bag rather than remembered here.
+    access(&self) -> TextureAccess =
+        TextureAccess.of(i32(number_property(c.get_texture_properties(self.handle),
+            "SDL.texture.access", i64(c.TEXTUREACCESS_STATIC))))
+
+    format(&self) -> PixelFormat =
+        PixelFormat.of(u32(number_property(c.get_texture_properties(self.handle),
+            "SDL.texture.format", 0)))
 
     // Replace the whole of a streaming texture from a CPU buffer. `pitch` is bytes per row of the
     // source — a Cairo image surface's stride, say — and the source's pixel layout has to match the
     // texture's format.
-    update(self, pixels: *u8, pitch: i32) -> bool =
-        sdl_update_texture(self.handle, null, pixels, pitch)
+    update(&self, pixels: *u8, pitch: i32) -> bool =
+        c.update_texture(self.handle, null, pixels, pitch)
 
     // Replace a rectangle of it.
-    update_rect(self, r: Rect, pixels: *u8, pitch: i32) -> bool
-        var c = r
+    update_rect(&self, r: Rect, pixels: *u8, pitch: i32) -> bool
+        var v = r
 
-        sdl_update_texture(self.handle, &c, pixels, pitch)
+        c.update_texture(self.handle, &v, pixels, pitch)
     end update_rect
 
-    // Replace the whole of a three-plane YUV texture — an `PIXELFORMAT_IYUV` or `PIXELFORMAT_YV12`
-    // one. Each plane is its first byte and a pitch in **bytes per row**, which is the decoder's
-    // stride and not necessarily the frame width, since planes are commonly padded. The chroma
-    // planes are half size on both axes.
+    // Replace the whole of a three-plane YUV texture — an `Iyuv` or `Yv12` one. Each plane is its
+    // first byte and a pitch in **bytes per row**, which is the decoder's stride and not necessarily
+    // the frame width, since planes are commonly padded. The chroma planes are half size on both
+    // axes.
     //
     // Pass them Y, U, V whatever the texture's format: SDL swaps them itself for YV12. From
     // libavcodec, `data(0)/linesize(0)` is Y, `1` is U and `2` is V.
-    update_yuv(self, y: *u8, y_pitch: i32, u: *u8, u_pitch: i32, v: *u8, v_pitch: i32) -> bool =
-        sdl_update_yuv_texture(self.handle, null, y, y_pitch, u, u_pitch, v, v_pitch)
+    update_yuv(&self, y: *u8, y_pitch: i32, u: *u8, u_pitch: i32, v: *u8, v_pitch: i32) -> bool =
+        c.update_yuv_texture(self.handle, null, y, y_pitch, u, u_pitch, v, v_pitch)
 
-    // Replace the whole of a two-plane texture — `PIXELFORMAT_NV12` or `PIXELFORMAT_NV21`, the
-    // layout hardware decoders produce, whose two chroma channels share one interleaved plane.
-    // `uv_pitch` counts bytes per row of that plane, so for 4:2:0 it spans `width / 2` U/V *pairs*
-    // and is typically the same number as `y_pitch`.
-    update_nv(self, y: *u8, y_pitch: i32, uv: *u8, uv_pitch: i32) -> bool =
-        sdl_update_nv_texture(self.handle, null, y, y_pitch, uv, uv_pitch)
-
-    destroy(self) = sdl_destroy_texture(self.handle)
+    // Replace the whole of a two-plane texture — `Nv12` or `Nv21`, the layout hardware decoders
+    // produce, whose two chroma channels share one interleaved plane. `uv_pitch` counts bytes per
+    // row of that plane, so for 4:2:0 it spans `width / 2` U/V *pairs* and is typically the same
+    // number as `y_pitch`.
+    update_nv(&self, y: *u8, y_pitch: i32, uv: *u8, uv_pitch: i32) -> bool =
+        c.update_nv_texture(self.handle, null, y, y_pitch, uv, uv_pitch)
 end Texture
+
+// The texture goes when the last reference to it does. A renderer must outlive its textures, which
+// is SDL's rule rather than this one's — dropping the renderer first destroys them itself.
+impl Drop for Texture
+    drop(self) = c.destroy_texture(self.handle)

@@ -1,6 +1,7 @@
 module sh.sysl.sdl3
-@link("SDL3")
 
+import sh.sysl.sdl3.c
+import sh.sysl.sdl3.c.{Rect, FRect, FPoint, Vertex}
 import sysl.math.{Float, pi}
 import sysl.slices.as_ptr
 import sysl.buf.{Buf, buf}
@@ -17,115 +18,83 @@ import sysl.buf.{Buf, buf}
 // of the sort is needed here, and the "which scratch buffer am I in" mistake that comes with it
 // cannot be made.
 
-// One vertex of `SDL_RenderGeometry` — position, colour in 0..1, and texture coordinates. Eight
-// contiguous floats with no padding, which is what SDL reads.
-struct Vertex
-    x: f32
-    y: f32
-    r: f32
-    g: f32
-    b: f32
-    a: f32
-    u: f32
-    v: f32
-
-extern "SDL_CreateRenderer" sdl_create_renderer(window: *u8, name: *u8) -> *u8
-extern "SDL_DestroyRenderer" sdl_destroy_renderer(renderer: *u8)
-extern "SDL_SetRenderDrawColor" sdl_set_render_draw_color(renderer: *u8, r: u8, g: u8, b: u8, a: u8) -> bool
-extern "SDL_SetRenderDrawColorFloat" sdl_set_render_draw_color_float(renderer: *u8, r: f32, g: f32, b: f32, a: f32) -> bool
-extern "SDL_SetRenderDrawBlendMode" sdl_set_render_draw_blend_mode(renderer: *u8, mode: u32) -> bool
-extern "SDL_RenderClear" sdl_render_clear(renderer: *u8) -> bool
-extern "SDL_RenderPoint" sdl_render_point(renderer: *u8, x: f32, y: f32) -> bool
-extern "SDL_RenderLine" sdl_render_line(renderer: *u8, x1: f32, y1: f32, x2: f32, y2: f32) -> bool
-extern "SDL_RenderRect" sdl_render_rect(renderer: *u8, rect: *FRect) -> bool
-extern "SDL_RenderFillRect" sdl_render_fill_rect(renderer: *u8, rect: *FRect) -> bool
-extern "SDL_RenderTexture" sdl_render_texture(renderer: *u8, texture: *u8, src: *FRect, dst: *FRect) -> bool
-extern "SDL_RenderGeometry" sdl_render_geometry(renderer: *u8, texture: *u8, vertices: *Vertex,
-                                                num_vertices: i32, indices: *i32, num_indices: i32) -> bool
-extern "SDL_RenderPresent" sdl_render_present(renderer: *u8) -> bool
-extern "SDL_SetRenderTarget" sdl_set_render_target(renderer: *u8, texture: *u8) -> bool
-extern "SDL_SetRenderVSync" sdl_set_render_vsync(renderer: *u8, vsync: i32) -> bool
-extern "SDL_GetRenderOutputSize" sdl_get_render_output_size(renderer: *u8, w: *i32, h: *i32) -> bool
-extern "SDL_SetRenderScale" sdl_set_render_scale(renderer: *u8, x: f32, y: f32) -> bool
-extern "SDL_SetRenderClipRect" sdl_set_render_clip_rect(renderer: *u8, rect: *Rect) -> bool
-extern "SDL_RenderReadPixels" sdl_render_read_pixels(renderer: *u8, rect: *Rect) -> *u8
-
 // An accelerated drawing surface. Made from a window with `Window.create_renderer`.
 struct Renderer
-    handle: *u8
+    handle: *c.Renderer
 
-    // ---- state ----
+    // ## State
 
-    set_draw_color(self, c: Color) -> bool =
-        sdl_set_render_draw_color(self.handle, c.r, c.g, c.b, c.a)
+    set_draw_color(&self, col: Color) -> bool =
+        c.set_render_draw_color(self.handle, col.r, col.g, col.b, col.a)
 
     // The same, in the renderer's own 0..1 float channels — worth having where the colour was
     // computed rather than named, since it skips the round trip through bytes.
-    set_draw_color_float(self, r: f32, g: f32, b: f32, a: f32) -> bool =
-        sdl_set_render_draw_color_float(self.handle, r, g, b, a)
+    set_draw_color_float(&self, r: f32, g: f32, b: f32, a: f32) -> bool =
+        c.set_render_draw_color_float(self.handle, r, g, b, a)
 
-    set_blend_mode(self, mode: u32) -> bool = sdl_set_render_draw_blend_mode(self.handle, mode)
+    set_blend_mode(&self, mode: BlendMode) -> bool =
+        c.set_render_draw_blend_mode(self.handle, mode.code())
 
     // Synchronise `present` to the display refresh, or run unthrottled. An SDL3 renderer starts
     // with vsync off, unlike SDL2's.
-    set_vsync(self, on: bool) -> bool = sdl_set_render_vsync(self.handle, if on then 1 else 0)
+    set_vsync(&self, on: bool) -> bool = c.set_render_vsync(self.handle, if on then 1 else 0)
 
     // Scale everything drawn afterwards. A program that wants to work in its own units — points, or
     // a fixed virtual resolution — sets this once rather than multiplying at every call.
-    set_scale(self, x: f32, y: f32) -> bool = sdl_set_render_scale(self.handle, x, y)
+    set_scale(&self, x: f32, y: f32) -> bool = c.set_render_scale(self.handle, x, y)
 
     // Confine drawing to a rectangle of the target.
-    set_clip_rect(self, r: Rect) -> bool
-        var c = r
+    set_clip_rect(&self, r: Rect) -> bool
+        var v = r
 
-        sdl_set_render_clip_rect(self.handle, &c)
+        c.set_render_clip_rect(self.handle, &v)
     end set_clip_rect
 
     // Remove any clip, so drawing reaches the whole target again.
-    reset_clip_rect(self) -> bool = sdl_set_render_clip_rect(self.handle, null)
+    reset_clip_rect(&self) -> bool = c.set_render_clip_rect(self.handle, null)
 
     // The size of what is actually being drawn into, in pixels. On a high-density display this is
     // larger than the window's logical size.
-    output_size(self) -> (i32, i32)
+    output_size(&self) -> (i32, i32)
         var w: i32 = 0
         var h: i32 = 0
 
-        sdl_get_render_output_size(self.handle, &w, &h)
+        c.get_render_output_size(self.handle, &w, &h)
         (w, h)
     end output_size
 
-    // ---- drawing ----
+    // ## Drawing
 
-    clear(self) -> bool = sdl_render_clear(self.handle)
+    clear(&self) -> bool = c.render_clear(self.handle)
 
     // Set the colour and clear in one call, which is what the top of a frame does.
-    clear_to(self, c: Color) -> bool
-        self.set_draw_color(c)
-        sdl_render_clear(self.handle)
+    clear_to(&self, col: Color) -> bool
+        self.set_draw_color(col)
+        c.render_clear(self.handle)
     end clear_to
 
-    draw_point(self, x: f32, y: f32) -> bool = sdl_render_point(self.handle, x, y)
+    draw_point(&self, x: f32, y: f32) -> bool = c.render_point(self.handle, x, y)
 
-    draw_line(self, x1: f32, y1: f32, x2: f32, y2: f32) -> bool =
-        sdl_render_line(self.handle, x1, y1, x2, y2)
+    draw_line(&self, x1: f32, y1: f32, x2: f32, y2: f32) -> bool =
+        c.render_line(self.handle, x1, y1, x2, y2)
 
     // The outline of a rectangle.
-    draw_rect(self, x: f32, y: f32, w: f32, h: f32) -> bool
+    draw_rect(&self, x: f32, y: f32, w: f32, h: f32) -> bool
         var r = FRect(x, y, w, h)
 
-        sdl_render_rect(self.handle, &r)
+        c.render_rect(self.handle, &r)
     end draw_rect
 
-    fill_rect(self, x: f32, y: f32, w: f32, h: f32) -> bool
+    fill_rect(&self, x: f32, y: f32, w: f32, h: f32) -> bool
         var r = FRect(x, y, w, h)
 
-        sdl_render_fill_rect(self.handle, &r)
+        c.render_fill_rect(self.handle, &r)
     end fill_rect
 
-    present(self) -> bool = sdl_render_present(self.handle)
+    present(&self) -> bool = c.render_present(self.handle)
 
-    // What is currently in the render target, as a new CPU surface the caller destroys. `None` if
-    // the read failed — on a backend that cannot read back, or for a rectangle outside the target.
+    // What is currently in the render target, as a new CPU surface. `None` if the read failed — on
+    // a backend that cannot read back, or for a rectangle outside the target.
     //
     // **Read before `present`, not after.** Presenting is allowed to leave the backbuffer
     // undefined, so a screenshot taken afterwards is a bet on the driver. Draw, read, then present.
@@ -133,59 +102,59 @@ struct Renderer
     // It is also **slow by nature**: the call waits for the GPU to finish and pulls the pixels back
     // across the bus, so it belongs in a screenshot key, a colour picker or a test, and not in a
     // frame loop.
-    read_pixels(self) -> Option[Surface]
-        val s = sdl_render_read_pixels(self.handle, null)
+    read_pixels(&self) -> Option[&Surface]
+        val s = c.render_read_pixels(self.handle, null)
 
         if s == null then None else Some(Surface(s))
     end read_pixels
 
     // The same, for one rectangle of the target rather than the whole of it. The rectangle is in
     // pixels — `output_size`'s units, which on a high-density display are not the window's.
-    read_pixels_rect(self, r: Rect) -> Option[Surface]
-        var c = r
-        val s = sdl_render_read_pixels(self.handle, &c)
+    read_pixels_rect(&self, r: Rect) -> Option[&Surface]
+        var v = r
+        val s = c.render_read_pixels(self.handle, &v)
 
         if s == null then None else Some(Surface(s))
     end read_pixels_rect
 
-    // ---- textures ----
+    // ## Textures
 
     // Blit a whole texture across the whole target.
-    copy(self, t: Texture) -> bool = sdl_render_texture(self.handle, t.handle, null, null)
+    copy(&self, t: &Texture) -> bool = c.render_texture(self.handle, t.handle, null, null)
 
     // Blit a whole texture at a position, at its own pixel size.
-    copy_at(self, t: Texture, x: f32, y: f32) -> bool
+    copy_at(&self, t: &Texture, x: f32, y: f32) -> bool
         val (w, h) = t.size()
 
         self.copy_to(t, FRect(x, y, w, h))
     end copy_at
 
     // Blit a whole texture into a destination rectangle, scaling to fit.
-    copy_to(self, t: Texture, dst: FRect) -> bool
+    copy_to(&self, t: &Texture, dst: FRect) -> bool
         var d = dst
 
-        sdl_render_texture(self.handle, t.handle, null, &d)
+        c.render_texture(self.handle, t.handle, null, &d)
     end copy_to
 
     // The general form: a sub-rectangle of the texture into a rectangle of the target, with any
     // scale between them done by the renderer. `src` selects an atlas entry, or the visible area
     // inside a padded decode buffer.
-    copy_part(self, t: Texture, src: FRect, dst: FRect) -> bool
+    copy_part(&self, t: &Texture, src: FRect, dst: FRect) -> bool
         var s = src
         var d = dst
 
-        sdl_render_texture(self.handle, t.handle, &s, &d)
+        c.render_texture(self.handle, t.handle, &s, &d)
     end copy_part
 
     // Draw into a texture rather than into the window. The texture must have been made with
-    // `TEXTUREACCESS_TARGET`.
-    set_target(self, t: Texture) -> bool = sdl_set_render_target(self.handle, t.handle)
+    // `TextureAccess.Target`.
+    set_target(&self, t: &Texture) -> bool = c.set_render_target(self.handle, t.handle)
 
     // Draw into the window again.
-    reset_target(self) -> bool = sdl_set_render_target(self.handle, null)
+    reset_target(&self) -> bool = c.set_render_target(self.handle, null)
 
-    create_texture(self, format: u32, access: i32, w: i32, h: i32) -> Option[Texture]
-        val t = sdl_create_texture(self.handle, format, access, w, h)
+    create_texture(&self, format: PixelFormat, access: TextureAccess, w: i32, h: i32) -> Option[&Texture]
+        val t = c.create_texture(self.handle, format.code(), access.code(), w, h)
 
         if t == null then None else Some(Texture(t))
     end create_texture
@@ -193,24 +162,25 @@ struct Renderer
     // A YUV texture that declares its colorspace — the only way to set one, since it is fixed at
     // creation and `create_texture` has no parameter for it.
     //
-    // **This matters and the failure is silent.** SDL assumes `COLORSPACE_BT601_LIMITED` for a YUV
+    // **This matters and the failure is silent.** SDL assumes `Colorspace.Bt601Limited` for a YUV
     // texture created without one, so HD footage — which is BT.709 — comes out with shifted greens
     // and reds rather than with an error. Pass what the source declares.
     //
-    // `format` is one of the planar `PIXELFORMAT_*` values and `access` is normally
-    // `TEXTUREACCESS_STREAMING`, the mode for a texture re-uploaded every frame.
-    create_yuv_texture(self, format: u32, access: i32, w: i32, h: i32, colorspace: u32) -> Option[Texture]
+    // `format` is one of the planar formats and `access` is normally `TextureAccess.Streaming`, the
+    // mode for a texture re-uploaded every frame.
+    create_yuv_texture(&self, format: PixelFormat, access: TextureAccess, w: i32, h: i32,
+                       colorspace: Colorspace) -> Option[&Texture]
         val props = create_properties()
 
         if props == 0 then return None
 
-        set_number_property(props, "SDL.texture.create.format", i64(format))
-        set_number_property(props, "SDL.texture.create.access", i64(access))
+        set_number_property(props, "SDL.texture.create.format", i64(format.code()))
+        set_number_property(props, "SDL.texture.create.access", i64(access.code()))
         set_number_property(props, "SDL.texture.create.width", i64(w))
         set_number_property(props, "SDL.texture.create.height", i64(h))
-        set_number_property(props, "SDL.texture.create.colorspace", i64(colorspace))
+        set_number_property(props, "SDL.texture.create.colorspace", i64(colorspace.code()))
 
-        val t = sdl_create_texture_with_properties(self.handle, props)
+        val t = c.create_texture_with_properties(self.handle, props)
 
         destroy_properties(props)
 
@@ -218,35 +188,35 @@ struct Renderer
     end create_yuv_texture
 
     // Upload a CPU surface — one the text or image binding produced — to a GPU texture.
-    create_texture_from_surface(self, s: Surface) -> Option[Texture]
-        val t = sdl_create_texture_from_surface(self.handle, s.handle)
+    create_texture_from_surface(&self, s: &Surface) -> Option[&Texture]
+        val t = c.create_texture_from_surface(self.handle, s.handle)
 
         if t == null then None else Some(Texture(t))
     end create_texture_from_surface
 
-    // ---- geometry ----
+    // ## Geometry
 
     // Draw arbitrary triangles. `indices` may be empty, in which case the vertices are taken three
-    // at a time. A null texture draws in the vertices' own colours.
-    draw_geometry(self, vertices: []Vertex, indices: []i32) -> bool
+    // at a time. Nothing is textured, so the vertices' own colours decide.
+    draw_geometry(&self, vertices: []Vertex, indices: []i32) -> bool
         if vertices.len == 0 then return true
 
-        sdl_render_geometry(self.handle, null, as_ptr(vertices), i32(vertices.len),
+        c.render_geometry(self.handle, null, as_ptr(vertices), i32(vertices.len),
             if indices.len == 0 then null else as_ptr(indices), i32(indices.len))
     end draw_geometry
 
     // The same, textured: the vertices' `u`/`v` select from `t`.
-    draw_geometry_textured(self, t: Texture, vertices: []Vertex, indices: []i32) -> bool
+    draw_geometry_textured(&self, t: &Texture, vertices: []Vertex, indices: []i32) -> bool
         if vertices.len == 0 then return true
 
-        sdl_render_geometry(self.handle, t.handle, as_ptr(vertices), i32(vertices.len),
+        c.render_geometry(self.handle, t.handle, as_ptr(vertices), i32(vertices.len),
             if indices.len == 0 then null else as_ptr(indices), i32(indices.len))
     end draw_geometry_textured
 
     // A filled circle, triangulated as a fan — SDL has no such call, and this is the replacement
     // for SDL2_gfx's. Smoothness comes from the segment count, which is scaled to the radius so
     // that a small dot stays cheap and a large disc stays round.
-    fill_circle(self, cx: f32, cy: f32, radius: f32, color: Color) -> bool
+    fill_circle(&self, cx: f32, cy: f32, radius: f32, color: Color) -> bool
         val segs = circle_segments(radius)
         var verts: Buf[Vertex] = buf()
         var idx: Buf[i32] = buf()
@@ -256,7 +226,7 @@ struct Renderer
     end fill_circle
 
     // A line with thickness, drawn as a quad of two triangles. A zero-length line draws nothing.
-    thick_line(self, x1: f32, y1: f32, x2: f32, y2: f32, width: f32, color: Color) -> bool
+    thick_line(&self, x1: f32, y1: f32, x2: f32, y2: f32, width: f32, color: Color) -> bool
         var verts: Buf[Vertex] = buf()
         var idx: Buf[i32] = buf()
 
@@ -269,7 +239,7 @@ struct Renderer
     // A filled convex polygon, triangulated as a fan from the first point. Fewer than three points
     // draws nothing; a *concave* outline drawn this way comes out wrong rather than refused, which
     // is the same bargain a fan always makes.
-    fill_convex_polygon(self, points: []FPoint, color: Color) -> bool
+    fill_convex_polygon(&self, points: []FPoint, color: Color) -> bool
         if points.len < 3 then return true
 
         var verts: Buf[Vertex] = buf()
@@ -284,13 +254,16 @@ struct Renderer
 
         self.draw_geometry(verts.view(), idx.view())
     end fill_convex_polygon
-
-    destroy(self) = sdl_destroy_renderer(self.handle)
 end Renderer
+
+// The renderer goes when the last reference to it does.
+impl Drop for Renderer
+    drop(self) = c.destroy_renderer(self.handle)
 
 // One vertex at a point, in a flat colour, with no texture coordinates — what every one of the
 // geometry helpers above builds.
-vertex_at(x: f32, y: f32, c: Color) -> Vertex = Vertex(x, y, c.rf, c.gf, c.bf, c.af, 0.0, 0.0)
+vertex_at(x: f32, y: f32, col: Color) -> Vertex =
+    Vertex(x, y, col.rf, col.gf, col.bf, col.af, 0.0, 0.0)
 
 // How many segments a circle of this radius is worth: more as it grows, bounded at both ends so
 // that a dot costs little and a disc stops getting smoother once nobody can tell.
@@ -305,7 +278,8 @@ end circle_segments
 //
 // These are separate from the drawing call so that the arithmetic can be tested without a live
 // renderer, which is the only part of it that can be wrong.
-build_circle(verts: *Buf[Vertex], idx: *Buf[i32], cx: f32, cy: f32, radius: f32, color: Color, segs: usize)
+build_circle(verts: *Buf[Vertex], idx: *Buf[i32], cx: f32, cy: f32, radius: f32, color: Color,
+             segs: usize)
     verts.push(vertex_at(cx, cy, color))
 
     for i in 0..<segs

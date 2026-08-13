@@ -1,292 +1,350 @@
 module sh.sysl.sdl3
-@link("SDL3")
 
+import sh.sysl.sdl3.c
 import sysl.text.from_cstring
 import sysl.buf.{Buf, buf}
 
 // The event queue.
 //
-// **`SDL_Event` is a union of about thirty structs in 128 bytes**, and this is how it is read here:
-// one struct holding the header every event begins with, and a view struct per variant that the
-// accessors reinterpret into. The layout is SDL3's stable 64-bit ABI and `tests.sysl` pins the
-// size against what C computes, which is the check that a field added to the wrong view would fail.
+// **`SDL_Event` is a union of about thirty structs in 128 bytes**, declared in `c` as the header
+// every event begins with and a view struct per variant. An `Event` here is that union with the
+// accessors on it: each one reinterprets into the view its field belongs to.
 //
 // **A field is only meaningful for the matching `kind`.** That is what a union means, and no
 // binding can make it otherwise — asking a mouse event for its scancode reads whatever the mouse
-// event had at that offset. Match on `kind` first.
+// event had at that offset. Match on `kind()` first.
 
-// Any event. Every one of them begins with these three fields, and the rest is the variant.
-@align(8)
+// What an event is. The variants are SDL's `SDL_EVENT_*` values, which is why the ones about
+// windows are spelled out rather than nested: they are one flat enumeration in C.
+enum EventKind
+    // The last window closed, or the platform asked the program to stop.
+    Quit
+
+    WindowShown
+    WindowHidden
+    WindowExposed
+    WindowMoved
+
+    // `WindowResized` fires when the logical size changes — a user drag, a programmatic resize.
+    // `WindowPixelSizeChanged` fires when the backbuffer's pixel size does, which is the same moment
+    // on a 1x display and is also when the window moves between displays of different density. A
+    // renderer that owns a sized backbuffer rebuilds it on the second.
+    WindowResized
+    WindowPixelSizeChanged
+
+    WindowMinimized
+    WindowMaximized
+    WindowRestored
+    WindowMouseEnter
+    WindowMouseLeave
+    WindowFocusGained
+    WindowFocusLost
+    WindowCloseRequested
+
+    KeyDown
+    KeyUp
+
+    // Finished text, after the platform's input method has had it. This is what a text field
+    // appends; the key events are for shortcuts and movement.
+    TextInput
+
+    // An input method's composition in progress — the underlined text a CJK or accent-composing
+    // keyboard shows before it commits.
+    TextEditing
+
+    MouseMotion
+    MouseButtonDown
+    MouseButtonUp
+    MouseWheel
+
+    // Drag and drop from the desktop onto the window. A drag delivers a `DropBegin`, then one
+    // `DropFile` (or `DropText`) per item, then `DropComplete` — only the per-item events carry a
+    // payload. SDL owns the string and frees it once the event is handled, so `Event.drop_data`
+    // copies it out.
+    DropFile
+    DropText
+    DropBegin
+    DropComplete
+    DropPosition
+
+    // The first of the range a program's own pushed events live in.
+    User
+
+    // Anything SDL delivers that this package does not name — a gamepad, a sensor, a camera. It is
+    // an ordinary answer and a program's `match` should have an arm for it.
+    Other(code: u32)
+
+    code(self) -> u32
+        self match
+            Quit -> c.EVENT_QUIT
+            WindowShown -> c.EVENT_WINDOW_SHOWN
+            WindowHidden -> c.EVENT_WINDOW_HIDDEN
+            WindowExposed -> c.EVENT_WINDOW_EXPOSED
+            WindowMoved -> c.EVENT_WINDOW_MOVED
+            WindowResized -> c.EVENT_WINDOW_RESIZED
+            WindowPixelSizeChanged -> c.EVENT_WINDOW_PIXEL_SIZE_CHANGED
+            WindowMinimized -> c.EVENT_WINDOW_MINIMIZED
+            WindowMaximized -> c.EVENT_WINDOW_MAXIMIZED
+            WindowRestored -> c.EVENT_WINDOW_RESTORED
+            WindowMouseEnter -> c.EVENT_WINDOW_MOUSE_ENTER
+            WindowMouseLeave -> c.EVENT_WINDOW_MOUSE_LEAVE
+            WindowFocusGained -> c.EVENT_WINDOW_FOCUS_GAINED
+            WindowFocusLost -> c.EVENT_WINDOW_FOCUS_LOST
+            WindowCloseRequested -> c.EVENT_WINDOW_CLOSE_REQUESTED
+            KeyDown -> c.EVENT_KEY_DOWN
+            KeyUp -> c.EVENT_KEY_UP
+            TextInput -> c.EVENT_TEXT_INPUT
+            TextEditing -> c.EVENT_TEXT_EDITING
+            MouseMotion -> c.EVENT_MOUSE_MOTION
+            MouseButtonDown -> c.EVENT_MOUSE_BUTTON_DOWN
+            MouseButtonUp -> c.EVENT_MOUSE_BUTTON_UP
+            MouseWheel -> c.EVENT_MOUSE_WHEEL
+            DropFile -> c.EVENT_DROP_FILE
+            DropText -> c.EVENT_DROP_TEXT
+            DropBegin -> c.EVENT_DROP_BEGIN
+            DropComplete -> c.EVENT_DROP_COMPLETE
+            DropPosition -> c.EVENT_DROP_POSITION
+            User -> c.EVENT_USER
+            Other(n) -> n
+
+    of(code: u32) -> EventKind
+        code match
+            c.EVENT_QUIT -> Quit
+            c.EVENT_WINDOW_SHOWN -> WindowShown
+            c.EVENT_WINDOW_HIDDEN -> WindowHidden
+            c.EVENT_WINDOW_EXPOSED -> WindowExposed
+            c.EVENT_WINDOW_MOVED -> WindowMoved
+            c.EVENT_WINDOW_RESIZED -> WindowResized
+            c.EVENT_WINDOW_PIXEL_SIZE_CHANGED -> WindowPixelSizeChanged
+            c.EVENT_WINDOW_MINIMIZED -> WindowMinimized
+            c.EVENT_WINDOW_MAXIMIZED -> WindowMaximized
+            c.EVENT_WINDOW_RESTORED -> WindowRestored
+            c.EVENT_WINDOW_MOUSE_ENTER -> WindowMouseEnter
+            c.EVENT_WINDOW_MOUSE_LEAVE -> WindowMouseLeave
+            c.EVENT_WINDOW_FOCUS_GAINED -> WindowFocusGained
+            c.EVENT_WINDOW_FOCUS_LOST -> WindowFocusLost
+            c.EVENT_WINDOW_CLOSE_REQUESTED -> WindowCloseRequested
+            c.EVENT_KEY_DOWN -> KeyDown
+            c.EVENT_KEY_UP -> KeyUp
+            c.EVENT_TEXT_INPUT -> TextInput
+            c.EVENT_TEXT_EDITING -> TextEditing
+            c.EVENT_MOUSE_MOTION -> MouseMotion
+            c.EVENT_MOUSE_BUTTON_DOWN -> MouseButtonDown
+            c.EVENT_MOUSE_BUTTON_UP -> MouseButtonUp
+            c.EVENT_MOUSE_WHEEL -> MouseWheel
+            c.EVENT_DROP_FILE -> DropFile
+            c.EVENT_DROP_TEXT -> DropText
+            c.EVENT_DROP_BEGIN -> DropBegin
+            c.EVENT_DROP_COMPLETE -> DropComplete
+            c.EVENT_DROP_POSITION -> DropPosition
+            c.EVENT_USER -> User
+            n -> Other(n)
+end EventKind
+
+impl Eq for EventKind
+    eq(self, other: EventKind) -> bool = self.code() == other.code()
+
+impl Display for EventKind
+    display(self, out: *Writer, fmt: FormatSpec)
+        val s = self match
+            Quit -> "quit"
+            WindowShown -> "window shown"
+            WindowHidden -> "window hidden"
+            WindowExposed -> "window exposed"
+            WindowMoved -> "window moved"
+            WindowResized -> "window resized"
+            WindowPixelSizeChanged -> "window pixel size changed"
+            WindowMinimized -> "window minimized"
+            WindowMaximized -> "window maximized"
+            WindowRestored -> "window restored"
+            WindowMouseEnter -> "mouse entered the window"
+            WindowMouseLeave -> "mouse left the window"
+            WindowFocusGained -> "window took focus"
+            WindowFocusLost -> "window lost focus"
+            WindowCloseRequested -> "window close requested"
+            KeyDown -> "key down"
+            KeyUp -> "key up"
+            TextInput -> "text input"
+            TextEditing -> "text editing"
+            MouseMotion -> "mouse motion"
+            MouseButtonDown -> "mouse button down"
+            MouseButtonUp -> "mouse button up"
+            MouseWheel -> "mouse wheel"
+            DropFile -> "file dropped"
+            DropText -> "text dropped"
+            DropBegin -> "drop begin"
+            DropComplete -> "drop complete"
+            DropPosition -> "drop position"
+            User -> "user event"
+            Other(_) -> "an event this binding does not name"
+
+        display_str(s, out, fmt)
+
+// Any event. It is SDL's 128-byte union — the three fields every event begins with, then the
+// variant — and the accessors below reinterpret it into whichever view the field belongs to.
 struct Event
-    kind: u32
-    reserved: u32
-    timestamp: u64
-    body: [112]u8
+    rec: c.Event
 
-    // ---- keyboard ----
+    // What kind of event this is, which is what everything else on it is conditional on.
+    kind(self) -> EventKind = EventKind.of(self.rec.kind)
 
-    private key(self) -> *KeyboardEvent = ptr_cast(&self)
+    // When it happened, in the same nanoseconds `ticks_ns` counts.
+    timestamp(self) -> u64 = self.rec.timestamp
 
-    // The physical key, an SDL scancode — the same number `Keyboard.held` is indexed by, and the
-    // one to use for a game's movement keys, since it does not move with the layout.
+    // ## Keyboard
+
+    private key(self) -> *c.KeyboardEvent = ptr_cast(&self.rec)
+
+    // The physical key, an SDL scancode — the same number `KeyboardState.held` is indexed by, and
+    // the one to use for a game's movement keys, since it does not move with the layout. `c`'s
+    // `SCANCODE_*` values name them.
     key_scancode(self) -> i32 = self.key().scancode
 
     // The *logical* key, an SDL keycode — what the layout says that physical key produces. This is
-    // the one a shortcut should compare against.
+    // the one a shortcut should compare against, using `c`'s `KEY_*` values.
     key_code(self) -> u32 = self.key().key
 
-    // The modifiers held while the key went down, a mask of the `KMOD_*` values. Test a
+    // The modifiers held while the key went down, a mask of `c`'s `KMOD_*` values. Test a
     // side-agnostic modifier with the combined alias: `(e.key_mod() & KMOD_SHIFT) != 0`.
     key_mod(self) -> u16 = self.key().mod
 
     // Whether this is the operating system repeating a held key rather than a fresh press.
     key_repeat(self) -> bool = self.key().repeat
 
-    // ---- mouse ----
+    // ## Mouse
+
+    private motion(self) -> *c.MouseMotionEvent = ptr_cast(&self.rec)
+
+    private button(self) -> *c.MouseButtonEvent = ptr_cast(&self.rec)
+
+    private wheel(self) -> *c.MouseWheelEvent = ptr_cast(&self.rec)
 
     // The cursor position a motion event reports, in window coordinates. A button event carries the
     // position at the same offsets, so this reads either.
     mouse_x(self) -> f32 = self.motion().x
     mouse_y(self) -> f32 = self.motion().y
 
-    private motion(self) -> *MouseMotionEvent = ptr_cast(&self)
-
-    private button(self) -> *MouseButtonEvent = ptr_cast(&self)
-
-    // Which button — one of the `BUTTON_*` values.
-    mouse_button(self) -> u8 = self.button().button
+    // Which button.
+    mouse_button(self) -> MouseButton = MouseButton.of(self.button().button)
 
     // How many clicks in the run this one closes: 1 for a single, 2 for a double.
     mouse_clicks(self) -> u8 = self.button().clicks
-
-    private wheel(self) -> *MouseWheelEvent = ptr_cast(&self)
 
     // Scroll amounts. Positive `y` is away from the user.
     wheel_x(self) -> f32 = self.wheel().x
     wheel_y(self) -> f32 = self.wheel().y
 
-    // ---- text input ----
+    // ## Text input
 
-    // The typed text of an `EVENT_TEXT_INPUT`, UTF-8. SDL owns the string and frees it once the
-    // event is handled, so it is copied out here.
-    private text_event(self) -> *TextEvent = ptr_cast(&self)
+    private text_event(self) -> *c.TextEvent = ptr_cast(&self.rec)
 
+    // The typed text of a `TextInput`, UTF-8. SDL owns the string and frees it once the event is
+    // handled, so it is copied out here.
     text(self) -> string
         val p = self.text_event().text
 
         if p == null then "" else from_cstring(p).unwrap_or("")
     end text
 
-    // ---- drag and drop ----
+    // ## Drag and drop
 
-    private drop(self) -> *DropEvent = ptr_cast(&self)
+    private drop_event(self) -> *c.DropEvent = ptr_cast(&self.rec)
 
-    // The dropped path or text. Empty for the payload-less `EVENT_DROP_BEGIN` and
-    // `EVENT_DROP_COMPLETE`. SDL frees the string after the event is handled, so this copies.
+    // The dropped path or text. Empty for the payload-less `DropBegin` and `DropComplete`. SDL frees
+    // the string after the event is handled, so this copies.
     drop_data(self) -> string
-        val p = self.drop().data
+        val p = self.drop_event().data
 
         if p == null then "" else from_cstring(p).unwrap_or("")
     end drop_data
 
     // The application the drag started in, where the platform says.
     drop_source(self) -> string
-        val p = self.drop().source
+        val p = self.drop_event().source
 
         if p == null then "" else from_cstring(p).unwrap_or("")
     end drop_source
 
-    // Where in the window the drop landed. Not populated on `EVENT_DROP_BEGIN`.
-    drop_x(self) -> f32 = self.drop().x
-    drop_y(self) -> f32 = self.drop().y
+    // Where in the window the drop landed. Not populated on `DropBegin`.
+    drop_x(self) -> f32 = self.drop_event().x
+    drop_y(self) -> f32 = self.drop_event().y
 
-    // ---- windows ----
+    // ## Windows
 
-    private window(self) -> *WindowEvent = ptr_cast(&self)
+    private window(self) -> *c.WindowEvent = ptr_cast(&self.rec)
 
     // Which window the event belongs to, matching `Window.id`. Every windowed variant carries it at
     // the same offset, so this reads a key, mouse, text or window event alike.
     window_id(self) -> u32 = self.window().window_id
 
-    // A window event's two payload words. For `EVENT_WINDOW_RESIZED` and
-    // `EVENT_WINDOW_PIXEL_SIZE_CHANGED` they are the new width and height.
+    // A window event's two payload words. For `WindowResized` and `WindowPixelSizeChanged` they are
+    // the new width and height.
     window_data1(self) -> i32 = self.window().data1
     window_data2(self) -> i32 = self.window().data2
 
-    // ---- user events ----
+    // ## User events
 
-    private user(self) -> *UserEvent = ptr_cast(&self)
+    private user(self) -> *c.UserEvent = ptr_cast(&self.rec)
 
     // The `code` a program put on an event it pushed itself.
     user_code(self) -> i32 = self.user().code
 end Event
 
-@align(8)
-struct KeyboardEvent
-    kind: u32
-    reserved: u32
-    timestamp: u64
-    window_id: u32
-    which: u32
-    scancode: i32
-    key: u32
-    mod: u16
-    raw: u16
-    down: bool
-    repeat: bool
-    tail: [90]u8
-
-@align(8)
-struct MouseMotionEvent
-    kind: u32
-    reserved: u32
-    timestamp: u64
-    window_id: u32
-    which: u32
-    state: u32
-    x: f32
-    y: f32
-    xrel: f32
-    yrel: f32
-    tail: [84]u8
-
-@align(8)
-struct MouseButtonEvent
-    kind: u32
-    reserved: u32
-    timestamp: u64
-    window_id: u32
-    which: u32
-    button: u8
-    down: bool
-    clicks: u8
-    pad: u8
-    x: f32
-    y: f32
-    tail: [88]u8
-
-@align(8)
-struct MouseWheelEvent
-    kind: u32
-    reserved: u32
-    timestamp: u64
-    window_id: u32
-    which: u32
-    x: f32
-    y: f32
-    direction: u32
-    mouse_x: f32
-    mouse_y: f32
-    tail: [84]u8
-
-@align(8)
-struct TextEvent
-    kind: u32
-    reserved: u32
-    timestamp: u64
-    window_id: u32
-    pad: u32
-    text: *u8
-    tail: [96]u8
-
-@align(8)
-struct DropEvent
-    kind: u32
-    reserved: u32
-    timestamp: u64
-    window_id: u32
-    x: f32
-    y: f32
-    pad: u32
-    source: *u8
-    data: *u8
-    tail: [80]u8
-
-@align(8)
-struct WindowEvent
-    kind: u32
-    reserved: u32
-    timestamp: u64
-    window_id: u32
-    data1: i32
-    data2: i32
-    tail: [100]u8
-
-@align(8)
-struct UserEvent
-    kind: u32
-    reserved: u32
-    timestamp: u64
-    window_id: u32
-    code: i32
-    data1: *u8
-    data2: *u8
-    tail: [88]u8
-
-extern "SDL_PollEvent" sdl_poll_event(event: *Event) -> bool
-extern "SDL_WaitEvent" sdl_wait_event(event: *Event) -> bool
-extern "SDL_WaitEventTimeout" sdl_wait_event_timeout(event: *Event, ms: i32) -> bool
-extern "SDL_PushEvent" sdl_push_event(event: *Event) -> bool
-extern "SDL_PumpEvents" sdl_pump_events()
-extern "SDL_FlushEvents" sdl_flush_events(min: u32, max: u32)
-extern "SDL_AddEventWatch" sdl_add_event_watch(f: *extern(*u8, *Event) -> bool, ud: *u8) -> bool
-extern "SDL_RemoveEventWatch" sdl_remove_event_watch(f: *extern(*u8, *Event) -> bool, ud: *u8)
-
 // An empty event, which is what the polling calls are handed to fill.
-empty_event() -> Event = Event(0, 0, 0, [0; 112])
+empty_event() -> Event = Event(c.Event(0, 0, 0, [0; 112]))
 
 // The next pending event, or nothing when the queue is empty. This is the loop a program runs at
 // the top of every frame.
 poll_event() -> Option[Event]
-    var e = empty_event()
+    var e = c.Event(0, 0, 0, [0; 112])
 
-    if sdl_poll_event(&e) then Some(e) else None
+    if c.poll_event(&e) then Some(Event(e)) else None
 end poll_event
 
 // Block until an event arrives. For a program that draws only when something changes — an editor
 // rather than a game — this is what keeps it off the processor between keystrokes.
 wait_event() -> Option[Event]
-    var e = empty_event()
+    var e = c.Event(0, 0, 0, [0; 112])
 
-    if sdl_wait_event(&e) then Some(e) else None
+    if c.wait_event(&e) then Some(Event(e)) else None
 end wait_event
 
 // Block for at most this many milliseconds. Nothing means the wait timed out.
 wait_event_timeout(ms: i32) -> Option[Event]
-    var e = empty_event()
+    var e = c.Event(0, 0, 0, [0; 112])
 
-    if sdl_wait_event_timeout(&e, ms) then Some(e) else None
+    if c.wait_event_timeout(&e, ms) then Some(Event(e)) else None
 end wait_event_timeout
 
-// Put an event on the queue. A program's own events use a `kind` at or above `EVENT_USER`.
+// Put an event on the queue.
 push_event(e: Event) -> bool
-    var c = e
+    var v = e.rec
 
-    sdl_push_event(&c)
+    c.push_event(&v)
 end push_event
 
 // A user event carrying a code, which is the usual way one part of a program wakes another.
 //
-// **It is built as a `UserEvent` and reinterpreted, rather than filled through the views above**,
+// **It is built as a `c.UserEvent` and reinterpreted, rather than filled through the views above**,
 // because those take `self` by value: the pointer they answer points into the method's own copy, so
 // reading through it is fine and writing through it would write into storage that is about to go.
 // That is why they are private, and why anything that *builds* an event constructs the variant.
 user_event(code: i32) -> Event
-    var u = UserEvent(EVENT_USER, 0, 0, 0, code, null, null, [0; 88])
-    val p: *Event = ptr_cast(&u)
+    var u = c.UserEvent(c.EVENT_USER, 0, 0, 0, code, null, null, [0; 88])
+    val p: *c.Event = ptr_cast(&u)
 
-    p[0]
+    Event(p[0])
 end user_event
 
 // Gather pending input from the platform without taking anything off the queue. `poll_event` does
-// this itself, so it is only needed by a program that reads `Keyboard.held` or `mouse_state`
+// this itself, so it is only needed by a program that reads `KeyboardState.held` or `mouse_state`
 // without polling.
-pump_events() = sdl_pump_events()
+pump_events() = c.pump_events()
 
 // Discard every queued event whose kind falls in the range, inclusive.
-flush_events(min: u32, max: u32) = sdl_flush_events(min, max)
+flush_events(min: EventKind, max: EventKind) = c.flush_events(min.code(), max.code())
 
-// ---- event watches ----
+// ## Event watches
 //
 // **SDL calls a C function pointer for every event as it is pumped, and a `*extern` cannot
 // capture** — so what a closure API needs is a single static trampoline registered with SDL and the
@@ -307,8 +365,8 @@ private var watch_registered: bool = false
 // The one function pointer SDL ever holds. Answering `true` leaves the event on the queue for the
 // ordinary `poll_event` loop to see as well, which is what a watch is for — observing, not
 // filtering.
-watch_trampoline(ud: *u8, ev: *Event) -> bool
-    val e = ev[0]
+watch_trampoline(ud: *u8, ev: *c.Event) -> bool
+    val e = Event(ev[0])
 
     for i in 0..<watches.len() do watches[i].f(e)
     true
@@ -322,7 +380,7 @@ end watch_trampoline
 // return to the application's own loop until the mouse comes up.
 add_event_watch(f: &Fn(Event) -> unit) -> int
     if !watch_registered
-        sdl_add_event_watch(&watch_trampoline, null)
+        c.add_event_watch(&watch_trampoline, null)
         watch_registered = true
 
     val id = next_watch_id
@@ -345,6 +403,6 @@ remove_event_watch(id: int)
         i += 1
 
     if watches.len() == 0 && watch_registered
-        sdl_remove_event_watch(&watch_trampoline, null)
+        c.remove_event_watch(&watch_trampoline, null)
         watch_registered = false
 end remove_event_watch
