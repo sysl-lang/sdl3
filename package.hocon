@@ -3,11 +3,11 @@
 // This is the block a consumer writes to reach this package:
 //
 //     dependencies {
-//       sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.2.0" }
+//       sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.2.1" }
 //     }
 //
 // The coordinate is identity rather than a URL, so it carries no `https://`, and the version is the
-// tag `v0.2.0` on this repository.
+// tag `v0.2.1` on this repository.
 //
 // **SDL3 has to be installed, and so do its headers.** Nothing is vendored here: SDL is a large C
 // project with its own build system and its own platform backends, and a package that carried it
@@ -36,7 +36,7 @@
 
 package {
   name    = "sdl3"
-  version = "0.2.0"
+  version = "0.2.1"
 }
 
 // **`posix`, because SDL is a hosted library.** It opens devices, starts threads, talks to a window
@@ -54,11 +54,24 @@ requires {
   posix = true
 
   // `sh.sysl.sdl3.c` asks the C compiler for SDL's constants rather than transcribing them, so the
-  // headers are read at compile time and not only at link time. Saying so here turns a forgotten
-  // include path into one refusal naming sdl3, rather than clang's "'SDL3/SDL.h' file not found" —
-  // a file the caller never wrote and has no way to place. The sentence is the whole point of the
-  // key: it is read by someone who does not yet know what this package needs.
-  headers {
-    sdl3 = "SDL3's own headers — `brew install sdl3` puts them in /opt/homebrew/include/SDL3, and Debian's libsdl3-dev in /usr/include/SDL3; the path to give is the directory *above* SDL3"
+  // headers are read at compile time and not only at link time — and `@link("SDL3")` needs the
+  // library itself at the end of it. Both are one fact, *this machine must have SDL3 installed*, and
+  // SDL answers it itself: an `sdl3.pc` sits beside the library wherever it came from, so the machine
+  // is asked rather than the reader.
+  //
+  // **The module is `sdl3` and the link directive says `SDL3`, which is why the name is written here
+  // rather than derived from it.** `-lSDL3` and `sdl3.pc` are two naming conventions that happen to
+  // share a word, and nothing recovers one from the other.
+  //
+  // This replaces the `headers { sdl3 = … }` this file carried until 0.2.1, and does not sit beside
+  // it: the probe deliberately does not satisfy a header requirement, so declaring both would refuse
+  // every build that did not pass the flag the key exists to make unnecessary. It also retires the
+  // sentence about giving the directory *above* SDL3 — pkg-config knows which one it is, and that
+  // instruction existed because a reader could not be expected to.
+  //
+  // `--include-path sdl3=<dir>` still answers it and stops the probe, for a machine with no
+  // pkg-config.
+  pkg_config {
+    sdl3 = "SDL3 — `brew install sdl3` on macOS, Debian's libsdl3-dev, and pkg-config finds it either way"
   }
 }
