@@ -75,7 +75,7 @@ wrong:
 
 Both compiled, linked and ran.
 
-## Installing SDL3, and the two flags
+## Installing SDL3
 
 Nothing is vendored here. SDL is a large C project with its own build system and its own platform
 backends, so a package carrying it would be maintaining a port rather than binding a library.
@@ -85,21 +85,26 @@ brew install sdl3                     # macOS
 sudo apt install libsdl3-dev          # Debian / Ubuntu
 ```
 
-**The headers are needed as well as the library**, because of the section above. A build names the
-prefix at both ends:
+**The headers are needed as well as the library**, because of the section above. Neither is something
+you name:
 
 ```
-sysl run prog.sysl --include-path sdl3=/opt/homebrew/include --link-path /opt/homebrew/lib
+sysl run prog.sysl
 ```
 
-The include path is given *by name* — `sdl3=` — which is what answers the `requires { headers }`
-declaration in `package.hocon`. Forget it and the refusal names this package and says where the
-headers usually are, rather than clang reporting a file the caller never wrote.
+`package.hocon` declares `requires { pkg_config { sdl3 = … } }`, so the compiler asks pkg-config for
+both ends at once. Without SDL3 installed the refusal names SDL3 and says how to install it, rather
+than clang reporting a file the caller never wrote.
 
-That both flags are needed is deliberate rather than a gap. `design/15 §8` refuses both a
-`@link_path` attribute and a `package.hocon` field for a prefix: where one lives is a fact about
-somebody's laptop, not a property of the package. `LIBRARY_PATH` and `CPATH` work too, since clang
-reads them, and are the better answer on a machine where the setting never changes.
+Until 0.2.1 this took two flags, and the include one had to know that the path to give is the
+directory *above* `SDL3` — which is exactly the sort of thing pkg-config knows and a reader should
+not have to.
+
+**The prefix still cannot live in this file**, and that has not changed: `design/15 §8` refuses both a
+`@link_path` attribute and a `package.hocon` field for one, because where a prefix lives is a fact
+about somebody's laptop rather than a property of the package. What changed is who answers the
+question. `--include-path sdl3=<dir>` and `--link-path <dir>` still answer it and take precedence, and
+`LIBRARY_PATH` and `CPATH` work too since clang reads them. **Needs sysl 0.0.56.**
 
 ## The companion libraries are separate packages
 
@@ -240,7 +245,7 @@ the answer for anything more.
 ## Tests
 
 ```
-sysl test . --include-path sdl3=/opt/homebrew/include --link-path /opt/homebrew/lib
+sysl test .
 ```
 
 Forty-two tests, run headless against a real SDL3 — the dummy video and audio drivers create
