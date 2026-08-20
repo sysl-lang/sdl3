@@ -109,36 +109,66 @@ c const
     BLENDMODE_MUL:   u32 = "SDL_BLENDMODE_MUL"
 
 // ### Events (SDL_EVENT_*)
+//
+// **In SDL's own order, which is worth keeping**: the application events, then the window ones, then
+// input by device, then the drops. A number here is never written down — the name is handed to the C
+// compiler — so the order buys nothing but a reader being able to find a neighbour.
 c const
-    EVENT_QUIT:                      u32 = "SDL_EVENT_QUIT"
-    EVENT_WINDOW_SHOWN:              u32 = "SDL_EVENT_WINDOW_SHOWN"
-    EVENT_WINDOW_HIDDEN:             u32 = "SDL_EVENT_WINDOW_HIDDEN"
-    EVENT_WINDOW_EXPOSED:            u32 = "SDL_EVENT_WINDOW_EXPOSED"
-    EVENT_WINDOW_MOVED:              u32 = "SDL_EVENT_WINDOW_MOVED"
-    EVENT_WINDOW_RESIZED:            u32 = "SDL_EVENT_WINDOW_RESIZED"
-    EVENT_WINDOW_PIXEL_SIZE_CHANGED: u32 = "SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED"
-    EVENT_WINDOW_MINIMIZED:          u32 = "SDL_EVENT_WINDOW_MINIMIZED"
-    EVENT_WINDOW_MAXIMIZED:          u32 = "SDL_EVENT_WINDOW_MAXIMIZED"
-    EVENT_WINDOW_RESTORED:           u32 = "SDL_EVENT_WINDOW_RESTORED"
-    EVENT_WINDOW_MOUSE_ENTER:        u32 = "SDL_EVENT_WINDOW_MOUSE_ENTER"
-    EVENT_WINDOW_MOUSE_LEAVE:        u32 = "SDL_EVENT_WINDOW_MOUSE_LEAVE"
-    EVENT_WINDOW_FOCUS_GAINED:       u32 = "SDL_EVENT_WINDOW_FOCUS_GAINED"
-    EVENT_WINDOW_FOCUS_LOST:         u32 = "SDL_EVENT_WINDOW_FOCUS_LOST"
-    EVENT_WINDOW_CLOSE_REQUESTED:    u32 = "SDL_EVENT_WINDOW_CLOSE_REQUESTED"
-    EVENT_KEY_DOWN:                  u32 = "SDL_EVENT_KEY_DOWN"
-    EVENT_KEY_UP:                    u32 = "SDL_EVENT_KEY_UP"
-    EVENT_TEXT_INPUT:                u32 = "SDL_EVENT_TEXT_INPUT"
-    EVENT_TEXT_EDITING:              u32 = "SDL_EVENT_TEXT_EDITING"
-    EVENT_MOUSE_MOTION:              u32 = "SDL_EVENT_MOUSE_MOTION"
-    EVENT_MOUSE_BUTTON_DOWN:         u32 = "SDL_EVENT_MOUSE_BUTTON_DOWN"
-    EVENT_MOUSE_BUTTON_UP:           u32 = "SDL_EVENT_MOUSE_BUTTON_UP"
-    EVENT_MOUSE_WHEEL:               u32 = "SDL_EVENT_MOUSE_WHEEL"
-    EVENT_DROP_FILE:                 u32 = "SDL_EVENT_DROP_FILE"
-    EVENT_DROP_TEXT:                 u32 = "SDL_EVENT_DROP_TEXT"
-    EVENT_DROP_BEGIN:                u32 = "SDL_EVENT_DROP_BEGIN"
-    EVENT_DROP_COMPLETE:             u32 = "SDL_EVENT_DROP_COMPLETE"
-    EVENT_DROP_POSITION:             u32 = "SDL_EVENT_DROP_POSITION"
-    EVENT_USER:                      u32 = "SDL_EVENT_USER"
+    EVENT_QUIT:                         u32 = "SDL_EVENT_QUIT"
+    EVENT_TERMINATING:                  u32 = "SDL_EVENT_TERMINATING"
+    EVENT_LOW_MEMORY:                   u32 = "SDL_EVENT_LOW_MEMORY"
+    EVENT_WILL_ENTER_BACKGROUND:        u32 = "SDL_EVENT_WILL_ENTER_BACKGROUND"
+    EVENT_DID_ENTER_BACKGROUND:         u32 = "SDL_EVENT_DID_ENTER_BACKGROUND"
+    EVENT_WILL_ENTER_FOREGROUND:        u32 = "SDL_EVENT_WILL_ENTER_FOREGROUND"
+    EVENT_DID_ENTER_FOREGROUND:         u32 = "SDL_EVENT_DID_ENTER_FOREGROUND"
+    EVENT_WINDOW_SHOWN:                 u32 = "SDL_EVENT_WINDOW_SHOWN"
+    EVENT_WINDOW_HIDDEN:                u32 = "SDL_EVENT_WINDOW_HIDDEN"
+    EVENT_WINDOW_EXPOSED:               u32 = "SDL_EVENT_WINDOW_EXPOSED"
+    EVENT_WINDOW_MOVED:                 u32 = "SDL_EVENT_WINDOW_MOVED"
+    EVENT_WINDOW_RESIZED:               u32 = "SDL_EVENT_WINDOW_RESIZED"
+    EVENT_WINDOW_PIXEL_SIZE_CHANGED:    u32 = "SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED"
+    EVENT_WINDOW_DISPLAY_CHANGED:       u32 = "SDL_EVENT_WINDOW_DISPLAY_CHANGED"
+    EVENT_WINDOW_DISPLAY_SCALE_CHANGED: u32 = "SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED"
+    EVENT_WINDOW_MINIMIZED:             u32 = "SDL_EVENT_WINDOW_MINIMIZED"
+    EVENT_WINDOW_MAXIMIZED:             u32 = "SDL_EVENT_WINDOW_MAXIMIZED"
+    EVENT_WINDOW_RESTORED:              u32 = "SDL_EVENT_WINDOW_RESTORED"
+    EVENT_WINDOW_MOUSE_ENTER:           u32 = "SDL_EVENT_WINDOW_MOUSE_ENTER"
+    EVENT_WINDOW_MOUSE_LEAVE:           u32 = "SDL_EVENT_WINDOW_MOUSE_LEAVE"
+    EVENT_WINDOW_FOCUS_GAINED:          u32 = "SDL_EVENT_WINDOW_FOCUS_GAINED"
+    EVENT_WINDOW_FOCUS_LOST:            u32 = "SDL_EVENT_WINDOW_FOCUS_LOST"
+    EVENT_WINDOW_CLOSE_REQUESTED:       u32 = "SDL_EVENT_WINDOW_CLOSE_REQUESTED"
+    EVENT_KEY_DOWN:                     u32 = "SDL_EVENT_KEY_DOWN"
+    EVENT_KEY_UP:                       u32 = "SDL_EVENT_KEY_UP"
+    EVENT_TEXT_INPUT:                   u32 = "SDL_EVENT_TEXT_INPUT"
+    EVENT_TEXT_EDITING:                 u32 = "SDL_EVENT_TEXT_EDITING"
+    EVENT_MOUSE_MOTION:                 u32 = "SDL_EVENT_MOUSE_MOTION"
+    EVENT_MOUSE_BUTTON_DOWN:            u32 = "SDL_EVENT_MOUSE_BUTTON_DOWN"
+    EVENT_MOUSE_BUTTON_UP:              u32 = "SDL_EVENT_MOUSE_BUTTON_UP"
+    EVENT_MOUSE_WHEEL:                  u32 = "SDL_EVENT_MOUSE_WHEEL"
+    EVENT_FINGER_DOWN:                  u32 = "SDL_EVENT_FINGER_DOWN"
+    EVENT_FINGER_UP:                    u32 = "SDL_EVENT_FINGER_UP"
+    EVENT_FINGER_MOTION:                u32 = "SDL_EVENT_FINGER_MOTION"
+    EVENT_FINGER_CANCELED:              u32 = "SDL_EVENT_FINGER_CANCELED"
+    EVENT_DROP_FILE:                    u32 = "SDL_EVENT_DROP_FILE"
+    EVENT_DROP_TEXT:                    u32 = "SDL_EVENT_DROP_TEXT"
+    EVENT_DROP_BEGIN:                   u32 = "SDL_EVENT_DROP_BEGIN"
+    EVENT_DROP_COMPLETE:                u32 = "SDL_EVENT_DROP_COMPLETE"
+    EVENT_DROP_POSITION:                u32 = "SDL_EVENT_DROP_POSITION"
+    EVENT_USER:                         u32 = "SDL_EVENT_USER"
+
+// ### Touch, and the two sentinels that keep it apart from the mouse
+//
+// **SDL delivers every touch twice**, and a program that reads both handles every tap twice. A
+// finger produces its own `SDL_EVENT_FINGER_*` *and* a synthesized mouse event, and on a platform
+// driven by a mouse the reverse also happens — so each carries a sentinel in the field naming the
+// device it came from, and comparing against it is how one of the two pairs is dropped.
+//
+// `SDL_TOUCH_MOUSEID` is the `which` of a mouse event that was really a finger; `SDL_MOUSE_TOUCHID`
+// is the `touchID` of a finger event that was really the mouse. Both are `-1` cast to their own id
+// type, which is why one is 32 bits and the other 64.
+c const
+    TOUCH_MOUSEID: u32 = "SDL_TOUCH_MOUSEID"
+    MOUSE_TOUCHID: u64 = "SDL_MOUSE_TOUCHID"
 
 // ### Mouse buttons
 c const
@@ -496,6 +526,30 @@ struct MouseWheelEvent
     mouse_y: f32
     tail: [84]u8
 
+// **The one view whose coordinates do not start where the others' do.** `SDL_TouchID` and
+// `SDL_FingerID` are both `Uint64`, so sixteen bytes of ids sit between the header and the floats
+// and `x` begins at byte 32 — where every mouse variant has its own `x` by 28 at the latest. The
+// window id is at the *end* here rather than the front, which is the other way round from the rest
+// of the union.
+//
+// A coordinate read from the wrong offset is still a float and still draws something, so nothing
+// about this fails loudly; `tests.sysl` reads all six fields back through the accessors, which is
+// what pins it.
+@align(8)
+struct TouchFingerEvent
+    kind: u32
+    reserved: u32
+    timestamp: u64
+    touch_id: u64
+    finger_id: u64
+    x: f32
+    y: f32
+    dx: f32
+    dy: f32
+    pressure: f32
+    window_id: u32
+    tail: [72]u8
+
 @align(8)
 struct TextEvent
     kind: u32
@@ -589,6 +643,14 @@ extern "SDL_GetPrimaryDisplay" get_primary_display() -> u32
 extern "SDL_GetDisplayForWindow" get_display_for_window(window: *Window) -> u32
 extern "SDL_GetDisplayUsableBounds" get_display_usable_bounds(display: u32, rect: *Rect) -> bool
 extern "SDL_GetDisplayBounds" get_display_bounds(display: u32, rect: *Rect) -> bool
+
+// **These three answer `0.0` for failure rather than `false`**, which is the one convention in this
+// header that is not the library's usual one — there is no out-parameter and no boolean to check, so
+// a caller that does not test for zero multiplies its whole layout by it. The module above turns the
+// zero into `1.0`, and says why.
+extern "SDL_GetWindowPixelDensity" get_window_pixel_density(window: *Window) -> f32
+extern "SDL_GetWindowDisplayScale" get_window_display_scale(window: *Window) -> f32
+extern "SDL_GetDisplayContentScale" get_display_content_scale(display: u32) -> f32
 
 // ## The renderer
 

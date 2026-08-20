@@ -82,6 +82,45 @@ struct Window
 
     pixel_format(&self) -> PixelFormat = PixelFormat.of(c.get_window_pixel_format(self.handle))
 
+    // **The scale to draw content at, and the number an interface is laid out in.** Multiply a size
+    // written in device-independent units by this and the result is the same physical size on every
+    // display: 16 units of text is legible on a laptop panel, an external monitor and a phone, and
+    // 16 *pixels* is legible on one of them.
+    //
+    // **This is the one to reach for, and `pixel_density` is not.** The density below says only how
+    // many pixels back a unit of window; this combines it with what the user asked for in the
+    // display's own settings, which is the part that makes a phone's 2.75 different from a retina
+    // laptop's 2.0 despite similar hardware. SDL's own wording is that this "is the expected scale
+    // for displaying content in this window".
+    //
+    // **It changes while the program runs** — the window is dragged to another monitor, or the
+    // setting itself is changed — and `EventKind.WindowDisplayScaleChanged` is what says so. Ask
+    // again there rather than reading it once at startup.
+    //
+    // **A failure answers `1.0` rather than SDL's `0.0`.** There is nothing a caller could do with
+    // zero except substitute one, and a zero that reached a layout would multiply every size in it
+    // to nothing — a whole interface drawn correctly at no size at all, which is a far worse failure
+    // than an unscaled one. So the substitution is made once, here.
+    display_scale(&self) -> f32
+        val s = c.get_window_display_scale(self.handle)
+
+        if s == 0.0 then 1.0 else s
+    end display_scale
+
+    // How many pixels the window's backbuffer holds per unit of its logical size — 2.0 for a 1920x1080
+    // window with a 3840x2160 backbuffer. It is the ratio between `size` and `size_in_pixels` and
+    // nothing more.
+    //
+    // **What this is for is pixels, not layout.** A program allocating a texture to cover part of the
+    // window, or reading back a region, sizes it with this; a program deciding how big a button
+    // should be wants `display_scale`. Reaching for this one to lay out gives an interface that is
+    // the right number of pixels and the wrong physical size.
+    pixel_density(&self) -> f32
+        val d = c.get_window_pixel_density(self.handle)
+
+        if d == 0.0 then 1.0 else d
+    end pixel_density
+
     // The part of the window it is safe to put something the user has to see or touch.
     //
     // **On a desktop this is the whole window and asking is a formality. On a phone it is the
@@ -180,3 +219,14 @@ display_usable_bounds(display: u32) -> Option[Rect]
 
     if c.get_display_usable_bounds(display, &r) then Some(r) else None
 end display_usable_bounds
+
+// A display's content scale, for a program that has to size something *before* it has a window to
+// ask. Once there is a window, `Window.display_scale` is the one to use — it answers for the display
+// the window is actually on, and keeps answering as it moves between them.
+//
+// A failure answers `1.0`, for the reason `Window.display_scale` gives.
+display_content_scale(display: u32) -> f32
+    val s = c.get_display_content_scale(display)
+
+    if s == 0.0 then 1.0 else s
+end display_content_scale

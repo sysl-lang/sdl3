@@ -20,6 +20,31 @@ enum EventKind
     // The last window closed, or the platform asked the program to stop.
     Quit
 
+    // ## The application lifecycle
+    //
+    // **On a desktop these barely fire. On a phone they are the program's whole shape**, because the
+    // system rather than the user decides when it stops running: Android delivers them from
+    // `onPause`, `onResume`, `onTrimMemory` and `onDestroy`, and iOS from the matching
+    // `UIApplicationDelegate` methods.
+    //
+    // **SDL's header says each of these "must be handled in a callback set with
+    // SDL_AddEventWatch()", and that is not advice.** They are delivered synchronously from inside
+    // the platform's own callback, on the platform's thread, while the program still has the CPU —
+    // and the program may not be given it back. A `DidEnterBackground` seen through `poll_event` is
+    // seen after the operating system already stopped scheduling the loop that polls, which on
+    // Android can be after the process has been killed. So a program that must save state, or must
+    // release the graphics resources a backgrounded app is not allowed to hold, registers
+    // `add_event_watch` and does it there.
+    //
+    // They are still delivered to the queue as well, which is enough for anything that only wants to
+    // stop animating.
+    Terminating
+    LowMemory
+    WillEnterBackground
+    DidEnterBackground
+    WillEnterForeground
+    DidEnterForeground
+
     WindowShown
     WindowHidden
     WindowExposed
@@ -31,6 +56,17 @@ enum EventKind
     // renderer that owns a sized backbuffer rebuilds it on the second.
     WindowResized
     WindowPixelSizeChanged
+
+    // The window moved to another display, and the scale it should draw at changed. `WindowMoved`
+    // fires for an ordinary drag across one desktop; these two fire when the *density* underneath
+    // changes — dragging between a laptop's panel and an external monitor, or a phone being handed a
+    // new display setting. A program that sized anything from `Window.display_scale` re-reads it
+    // here, which is the whole reason to know about them.
+    //
+    // `window_data1` on a `WindowDisplayChanged` is the new display's id. A scale change carries no
+    // payload, because the scale is asked for rather than delivered.
+    WindowDisplayChanged
+    WindowDisplayScaleChanged
 
     WindowMinimized
     WindowMaximized
@@ -57,6 +93,28 @@ enum EventKind
     MouseButtonUp
     MouseWheel
 
+    // ## Touch
+    //
+    // A finger on a touchscreen or a trackpad. `FingerCanceled` is the one with no mouse counterpart
+    // and the one most easily left out: the system took the gesture away — an incoming call, a
+    // notification pulled down, a system back-swipe that started at the edge — and the finger that
+    // went down will never come up. A widget tracking a drag has to let go on it, or it stays
+    // captured by a finger that is gone.
+    //
+    // **A program can usually ignore all four.** SDL synthesizes mouse events from touch, so a tap
+    // arrives as `MouseButtonDown` with a position already in window coordinates, and that is the
+    // whole of the input for anything that only wants taps — it is what `androidkit` does, and the
+    // same source then runs on a desktop. These are for what a mouse cannot say: which finger, how
+    // many at once, and how hard.
+    //
+    // **Handling both means handling every tap twice**, so a program that reads these filters the
+    // mouse events whose `mouse_which` is `c.TOUCH_MOUSEID`, or the finger events whose `touch_id`
+    // is `c.MOUSE_TOUCHID`, depending on which pair it would rather keep.
+    FingerDown
+    FingerUp
+    FingerMotion
+    FingerCanceled
+
     // Drag and drop from the desktop onto the window. A drag delivers a `DropBegin`, then one
     // `DropFile` (or `DropText`) per item, then `DropComplete` — only the per-item events carry a
     // payload. SDL owns the string and frees it once the event is handled, so `Event.drop_data`
@@ -77,12 +135,20 @@ enum EventKind
     code(self) -> u32
         self match
             Quit -> c.EVENT_QUIT
+            Terminating -> c.EVENT_TERMINATING
+            LowMemory -> c.EVENT_LOW_MEMORY
+            WillEnterBackground -> c.EVENT_WILL_ENTER_BACKGROUND
+            DidEnterBackground -> c.EVENT_DID_ENTER_BACKGROUND
+            WillEnterForeground -> c.EVENT_WILL_ENTER_FOREGROUND
+            DidEnterForeground -> c.EVENT_DID_ENTER_FOREGROUND
             WindowShown -> c.EVENT_WINDOW_SHOWN
             WindowHidden -> c.EVENT_WINDOW_HIDDEN
             WindowExposed -> c.EVENT_WINDOW_EXPOSED
             WindowMoved -> c.EVENT_WINDOW_MOVED
             WindowResized -> c.EVENT_WINDOW_RESIZED
             WindowPixelSizeChanged -> c.EVENT_WINDOW_PIXEL_SIZE_CHANGED
+            WindowDisplayChanged -> c.EVENT_WINDOW_DISPLAY_CHANGED
+            WindowDisplayScaleChanged -> c.EVENT_WINDOW_DISPLAY_SCALE_CHANGED
             WindowMinimized -> c.EVENT_WINDOW_MINIMIZED
             WindowMaximized -> c.EVENT_WINDOW_MAXIMIZED
             WindowRestored -> c.EVENT_WINDOW_RESTORED
@@ -99,6 +165,10 @@ enum EventKind
             MouseButtonDown -> c.EVENT_MOUSE_BUTTON_DOWN
             MouseButtonUp -> c.EVENT_MOUSE_BUTTON_UP
             MouseWheel -> c.EVENT_MOUSE_WHEEL
+            FingerDown -> c.EVENT_FINGER_DOWN
+            FingerUp -> c.EVENT_FINGER_UP
+            FingerMotion -> c.EVENT_FINGER_MOTION
+            FingerCanceled -> c.EVENT_FINGER_CANCELED
             DropFile -> c.EVENT_DROP_FILE
             DropText -> c.EVENT_DROP_TEXT
             DropBegin -> c.EVENT_DROP_BEGIN
@@ -110,12 +180,20 @@ enum EventKind
     of(code: u32) -> EventKind
         code match
             c.EVENT_QUIT -> Quit
+            c.EVENT_TERMINATING -> Terminating
+            c.EVENT_LOW_MEMORY -> LowMemory
+            c.EVENT_WILL_ENTER_BACKGROUND -> WillEnterBackground
+            c.EVENT_DID_ENTER_BACKGROUND -> DidEnterBackground
+            c.EVENT_WILL_ENTER_FOREGROUND -> WillEnterForeground
+            c.EVENT_DID_ENTER_FOREGROUND -> DidEnterForeground
             c.EVENT_WINDOW_SHOWN -> WindowShown
             c.EVENT_WINDOW_HIDDEN -> WindowHidden
             c.EVENT_WINDOW_EXPOSED -> WindowExposed
             c.EVENT_WINDOW_MOVED -> WindowMoved
             c.EVENT_WINDOW_RESIZED -> WindowResized
             c.EVENT_WINDOW_PIXEL_SIZE_CHANGED -> WindowPixelSizeChanged
+            c.EVENT_WINDOW_DISPLAY_CHANGED -> WindowDisplayChanged
+            c.EVENT_WINDOW_DISPLAY_SCALE_CHANGED -> WindowDisplayScaleChanged
             c.EVENT_WINDOW_MINIMIZED -> WindowMinimized
             c.EVENT_WINDOW_MAXIMIZED -> WindowMaximized
             c.EVENT_WINDOW_RESTORED -> WindowRestored
@@ -132,6 +210,10 @@ enum EventKind
             c.EVENT_MOUSE_BUTTON_DOWN -> MouseButtonDown
             c.EVENT_MOUSE_BUTTON_UP -> MouseButtonUp
             c.EVENT_MOUSE_WHEEL -> MouseWheel
+            c.EVENT_FINGER_DOWN -> FingerDown
+            c.EVENT_FINGER_UP -> FingerUp
+            c.EVENT_FINGER_MOTION -> FingerMotion
+            c.EVENT_FINGER_CANCELED -> FingerCanceled
             c.EVENT_DROP_FILE -> DropFile
             c.EVENT_DROP_TEXT -> DropText
             c.EVENT_DROP_BEGIN -> DropBegin
@@ -148,12 +230,20 @@ impl Display for EventKind
     display(self, out: *Writer, fmt: FormatSpec)
         val s = self match
             Quit -> "quit"
+            Terminating -> "terminating"
+            LowMemory -> "low memory"
+            WillEnterBackground -> "will enter background"
+            DidEnterBackground -> "did enter background"
+            WillEnterForeground -> "will enter foreground"
+            DidEnterForeground -> "did enter foreground"
             WindowShown -> "window shown"
             WindowHidden -> "window hidden"
             WindowExposed -> "window exposed"
             WindowMoved -> "window moved"
             WindowResized -> "window resized"
             WindowPixelSizeChanged -> "window pixel size changed"
+            WindowDisplayChanged -> "window display changed"
+            WindowDisplayScaleChanged -> "window display scale changed"
             WindowMinimized -> "window minimized"
             WindowMaximized -> "window maximized"
             WindowRestored -> "window restored"
@@ -170,6 +260,10 @@ impl Display for EventKind
             MouseButtonDown -> "mouse button down"
             MouseButtonUp -> "mouse button up"
             MouseWheel -> "mouse wheel"
+            FingerDown -> "finger down"
+            FingerUp -> "finger up"
+            FingerMotion -> "finger motion"
+            FingerCanceled -> "finger canceled"
             DropFile -> "file dropped"
             DropText -> "text dropped"
             DropBegin -> "drop begin"
@@ -234,6 +328,51 @@ struct Event
     wheel_x(self) -> f32 = self.wheel().x
     wheel_y(self) -> f32 = self.wheel().y
 
+    // Which mouse, and the reason to care is that one of them is not a mouse. A motion, button or
+    // wheel event synthesized from a finger reports `c.TOUCH_MOUSEID` here, so a program reading
+    // the `Finger*` events drops these and handles each tap once.
+    mouse_which(self) -> u32 = self.motion().which
+
+    // ## Touch
+
+    private finger(self) -> *c.TouchFingerEvent = ptr_cast(&self.rec)
+
+    // **Where the finger is, normalized to `0..1` across the window — not pixels.** This is the one
+    // place touch and mouse disagree about units, and the disagreement is silent: a `0.5` used as a
+    // coordinate lands in the top-left corner rather than the middle, and a layout written against
+    // it is wrong everywhere except a window one pixel wide. `finger_pos_in` does the multiplication.
+    finger_x(self) -> f32 = self.finger().x
+    finger_y(self) -> f32 = self.finger().y
+
+    // The same position in window coordinates, which is what every other event already carries and
+    // what a hit test wants. Pass the window's own size — `Window.size` for a program drawing in
+    // logical coordinates, `Renderer.output_size` for one drawing in pixels.
+    finger_pos_in(self, width: f32, height: f32) -> (f32, f32) =
+        (self.finger().x * width, self.finger().y * height)
+
+    // How far the finger moved since the last motion event, normalized the same way and signed, so
+    // in `-1..1`.
+    finger_dx(self) -> f32 = self.finger().dx
+    finger_dy(self) -> f32 = self.finger().dy
+
+    // How hard, in `0..1`. A device that cannot measure it reports `1.0` while the finger is down,
+    // so this is a fine thing to draw with and a poor thing to branch on.
+    finger_pressure(self) -> f32 = self.finger().pressure
+
+    // Which finger, and which device it is on. The finger id is what identifies one finger across
+    // its whole gesture — it is stable from `FingerDown` to the `FingerUp` or `FingerCanceled` that
+    // ends it, and is how two fingers are told apart for a pinch. It is *not* an index: nothing says
+    // the first finger down has the lower number, and neither is reused predictably.
+    //
+    // A `touch_id` of `c.MOUSE_TOUCHID` means this was really the mouse.
+    finger_id(self) -> u64 = self.finger().finger_id
+    touch_id(self) -> u64 = self.finger().touch_id
+
+    // The window under the finger. **This is what `window_id` cannot answer for a touch event** —
+    // SDL puts this field at the end of the touch struct rather than at the front where every other
+    // variant has it, so the general accessor reads the touch id's low half instead.
+    finger_window_id(self) -> u32 = self.finger().window_id
+
     // ## Text input
 
     private text_event(self) -> *c.TextEvent = ptr_cast(&self.rec)
@@ -273,8 +412,13 @@ struct Event
 
     private window(self) -> *c.WindowEvent = ptr_cast(&self.rec)
 
-    // Which window the event belongs to, matching `Window.id`. Every windowed variant carries it at
-    // the same offset, so this reads a key, mouse, text or window event alike.
+    // Which window the event belongs to, matching `Window.id`. Nearly every windowed variant carries
+    // it at the same offset, so this reads a key, mouse, text, drop or window event alike.
+    //
+    // **The touch events are the exception, and this answers nonsense for one.** `SDL_TouchFingerEvent`
+    // puts its window id at the *end* of the struct rather than the front, and what sits at this
+    // offset instead is the low half of the 64-bit touch id. Use `finger_window_id` for those; there
+    // is no way for one accessor to serve both, because the union is what it is.
     window_id(self) -> u32 = self.window().window_id
 
     // A window event's two payload words. For `WindowResized` and `WindowPixelSizeChanged` they are

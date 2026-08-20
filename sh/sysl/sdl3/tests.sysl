@@ -58,6 +58,7 @@ every_event_view_is_the_size_of_the_union()
     assert_eq(sizeof(c.MouseMotionEvent), 128usize, "the motion view")
     assert_eq(sizeof(c.MouseButtonEvent), 128usize, "the button view")
     assert_eq(sizeof(c.MouseWheelEvent), 128usize, "the wheel view")
+    assert_eq(sizeof(c.TouchFingerEvent), 128usize, "the touch view")
     assert_eq(sizeof(c.TextEvent), 128usize, "the text view")
     assert_eq(sizeof(c.DropEvent), 128usize, "the drop view")
     assert_eq(sizeof(c.WindowEvent), 128usize, "the window view")
@@ -154,6 +155,36 @@ an_event_kind_comes_back_as_itself()
         "the pixel size change, which is not the resize beside it")
     assert_eq(EventKind.of(c.EVENT_USER), EventKind.User, "user")
 
+    // The four touch kinds are one contiguous run in SDL's enumeration, which is exactly the shape a
+    // table slips by one in.
+    assert_eq(EventKind.of(c.EVENT_FINGER_DOWN), EventKind.FingerDown, "finger down")
+    assert_eq(EventKind.of(c.EVENT_FINGER_UP), EventKind.FingerUp, "finger up")
+    assert_eq(EventKind.of(c.EVENT_FINGER_MOTION), EventKind.FingerMotion, "finger motion")
+    assert_eq(EventKind.of(c.EVENT_FINGER_CANCELED), EventKind.FingerCanceled, "finger canceled")
+
+    // And so are the six lifecycle events, where the two halves of each pair differ by one word.
+    assert_eq(EventKind.of(c.EVENT_TERMINATING), EventKind.Terminating, "terminating")
+    assert_eq(EventKind.of(c.EVENT_LOW_MEMORY), EventKind.LowMemory, "low memory")
+    assert_eq(EventKind.of(c.EVENT_WILL_ENTER_BACKGROUND), EventKind.WillEnterBackground,
+        "will enter background")
+    assert_eq(EventKind.of(c.EVENT_DID_ENTER_BACKGROUND), EventKind.DidEnterBackground,
+        "did enter background, which is the one after it")
+    assert_eq(EventKind.of(c.EVENT_WILL_ENTER_FOREGROUND), EventKind.WillEnterForeground,
+        "will enter foreground")
+    assert_eq(EventKind.of(c.EVENT_DID_ENTER_FOREGROUND), EventKind.DidEnterForeground,
+        "did enter foreground")
+
+    assert_eq(EventKind.of(c.EVENT_WINDOW_DISPLAY_SCALE_CHANGED), EventKind.WindowDisplayScaleChanged,
+        "the scale change, which is not the display change beside it")
+    assert_eq(EventKind.of(c.EVENT_WINDOW_DISPLAY_CHANGED), EventKind.WindowDisplayChanged,
+        "and the display change")
+
+    // Every one of them carries its number back out, which is the direction `flush_events` uses.
+    assert_eq(EventKind.FingerCanceled.code(), c.EVENT_FINGER_CANCELED, "and back")
+    assert_eq(EventKind.DidEnterBackground.code(), c.EVENT_DID_ENTER_BACKGROUND, "and back")
+    assert_eq(EventKind.WindowDisplayScaleChanged.code(), c.EVENT_WINDOW_DISPLAY_SCALE_CHANGED,
+        "and back")
+
     // A gamepad axis, which this package does not name. It is an ordinary answer.
     assert_eq(EventKind.of(0x650u32), EventKind.Other(0x650), "an event with no variant here")
     assert_eq(EventKind.Other(0x650).code(), 0x650u32, "and it carries its number back out")
@@ -229,6 +260,8 @@ the_system_cursors_are_sdls_own_numbers()
 the_enums_print_as_words()
     assert_eq(f"${EventKind.WindowPixelSizeChanged}", "window pixel size changed", "an event kind")
     assert_eq(f"${EventKind.Other(0x650)}", "an event this binding does not name", "and an unnamed one")
+    assert_eq(f"${EventKind.FingerCanceled}", "finger canceled", "a touch kind")
+    assert_eq(f"${EventKind.DidEnterBackground}", "did enter background", "a lifecycle kind")
     assert_eq(f"${PixelFormat.Argb8888}", "argb8888", "a pixel format")
     assert_eq(f"${BlendMode.Blend}", "blend", "a blend mode")
     assert_eq(f"${MouseButton.Right}", "right", "a mouse button")
@@ -479,6 +512,32 @@ every_variant_reads_its_own_fields()
 
     assert_eq(we.wheel_x(), -1.0f32, "the wheel x")
     assert_eq(we.wheel_y(), 3.0f32, "and the wheel y, which is positive away from the user")
+
+    // **The one view whose floats do not start where the others' do.** Two 64-bit ids sit between
+    // the header and the coordinates, so `x` is at byte 32 rather than the 28-or-less every mouse
+    // variant puts it at, and the window id is at the end instead of the front. Every field is read
+    // back rather than a representative one, because a coordinate taken from the wrong offset is
+    // still a float: nothing here would fail on its own.
+    var t = c.TouchFingerEvent(c.EVENT_FINGER_MOTION, 0, 0, 7, 99, 0.25, 0.75, 0.5, -0.5, 0.5, 3,
+        [0; 72])
+    val tp: *c.Event = ptr_cast(&t)
+    val te = Event(tp[0])
+
+    assert_eq(te.kind(), EventKind.FingerMotion, "a finger motion")
+    assert_eq(te.touch_id(), 7u64, "the touch device id, which is 64 bits")
+    assert_eq(te.finger_id(), 99u64, "and the finger id, which is the other 64")
+    assert_eq(te.finger_x(), 0.25f32, "the x, normalized across the window")
+    assert_eq(te.finger_y(), 0.75f32, "and the y")
+    assert_eq(te.finger_dx(), 0.5f32, "the movement since the last motion")
+    assert_eq(te.finger_dy(), -0.5f32, "which is signed")
+    assert_eq(te.finger_pressure(), 0.5f32, "and the pressure")
+    assert_eq(te.finger_window_id(), 3u32, "the window, which this variant keeps at the far end")
+
+    // **And the trap that follows from it, asserted rather than only written down.** The general
+    // `window_id` reads the offset every other variant keeps a window id at, which on a touch event
+    // is the low half of the 64-bit touch id — so it answers 7 here, the touch device, and not the
+    // window 3 that the event actually carries.
+    assert_eq(te.window_id(), 7u32, "window_id reads the touch id's low half, which is why it is wrong")
 
     var d = c.DropEvent(c.EVENT_DROP_FILE, 0, 0, 3, 8.0, 9.0, 0, null, null, [0; 80])
     val dp: *c.Event = ptr_cast(&d)
@@ -960,6 +1019,128 @@ a_window_reports_a_safe_area_inside_itself()
     assert_eq(safe.y, 0, "in both axes")
     assert_eq(safe.w, w, "and it is the whole window wide")
     assert_eq(safe.h, h, "and the whole window tall")
+
+// ## Touch
+
+// **The two sentinels, which are the whole of telling a real device from a synthesized one.** Both
+// are `-1` cast to an id type, so each pins its own *width* as much as its value: `SDL_TOUCH_MOUSEID`
+// bound as 64 bits, or `SDL_MOUSE_TOUCHID` as 32, would never equal what SDL puts in the event and
+// the filter that drops duplicate taps would silently stop dropping them.
+@test
+the_touch_and_mouse_sentinels_are_sdls_own_numbers()
+    assert_eq(c.TOUCH_MOUSEID, 0xFFFFFFFFu32, "a mouse id of -1, in 32 bits")
+    assert_eq(c.MOUSE_TOUCHID, 0xFFFFFFFFFFFFFFFFu64, "and a touch id of -1, in 64")
+
+    // A mouse event SDL made from a finger, which is what every tap looks like on a phone unless the
+    // program reads the finger events instead.
+    var m = c.MouseButtonEvent(c.EVENT_MOUSE_BUTTON_DOWN, 0, 0, 3, c.TOUCH_MOUSEID, c.BUTTON_LEFT,
+        true, 1, 0, 5.0, 6.0, [0; 88])
+    val mp: *c.Event = ptr_cast(&m)
+
+    assert_eq(Event(mp[0]).mouse_which(), c.TOUCH_MOUSEID, "this one was really a finger")
+
+    // And the other direction: a finger event a desktop made from the mouse.
+    var t = c.TouchFingerEvent(c.EVENT_FINGER_DOWN, 0, 0, c.MOUSE_TOUCHID, 0, 0.0, 0.0, 0.0, 0.0,
+        1.0, 3, [0; 72])
+    val tp: *c.Event = ptr_cast(&t)
+
+    assert_eq(Event(tp[0]).touch_id(), c.MOUSE_TOUCHID, "and this one was really the mouse")
+
+// **The duplicate-tap filter the README teaches, run against the real queue.** One finger down and
+// the synthesized mouse event SDL would deliver beside it, both pushed and both polled back — a
+// program that counts every event sees the tap twice, and the same program filtering on the
+// sentinel sees it once. That is the claim, and counting both ways in one test is what makes the
+// filter's arithmetic visible rather than asserted.
+@test
+a_synthesized_tap_is_filtered_to_one()
+    assert(headless(), "SDL_Init")
+
+    var f = c.TouchFingerEvent(c.EVENT_FINGER_DOWN, 0, 0, 1, 42, 0.5, 0.5, 0.0, 0.0, 1.0, 0,
+        [0; 72])
+    val fp: *c.Event = ptr_cast(&f)
+
+    var m = c.MouseButtonEvent(c.EVENT_MOUSE_BUTTON_DOWN, 0, 0, 0, c.TOUCH_MOUSEID, c.BUTTON_LEFT,
+        true, 1, 0, 160.0, 240.0, [0; 88])
+    val mp: *c.Event = ptr_cast(&m)
+
+    assert(push_event(Event(fp[0])), "the finger event went on the queue")
+    assert(push_event(Event(mp[0])), "and the mouse event SDL would synthesize beside it")
+
+    var taps = 0
+    var filtered = 0
+
+    while true
+        poll_event() match
+            Some(e) ->
+                val down = e.kind() == EventKind.FingerDown || e.kind() == EventKind.MouseButtonDown
+
+                if down
+                    taps += 1
+
+                    // Keep the finger events; drop the mouse events that were really fingers.
+                    if !(e.kind() == EventKind.MouseButtonDown && e.mouse_which() == c.TOUCH_MOUSEID)
+                        filtered += 1
+            None -> break
+
+    assert_eq(taps, 2, "one tap arrives as two events, which is the whole problem")
+    assert_eq(filtered, 1, "and the sentinel takes it back to one")
+
+    quit()
+
+// A finger's position is normalized and every other event's is not, so the conversion is where a
+// layout goes wrong. A quarter of the way across a 320-wide window is 80.
+@test
+a_finger_position_scales_to_the_window()
+    var t = c.TouchFingerEvent(c.EVENT_FINGER_DOWN, 0, 0, 1, 1, 0.25, 0.75, 0.0, 0.0, 1.0, 3,
+        [0; 72])
+    val tp: *c.Event = ptr_cast(&t)
+    val e = Event(tp[0])
+    val (x, y) = e.finger_pos_in(320.0, 480.0)
+
+    assert_eq(x, 80.0f32, "a quarter across a 320-wide window")
+    assert_eq(y, 360.0f32, "and three quarters down a 480-tall one")
+
+    // The normalized values are still what the accessors answer — the conversion is asked for and
+    // never applied behind the caller's back.
+    assert_eq(e.finger_x(), 0.25f32, "the raw x is untouched")
+    assert_eq(e.finger_y(), 0.75f32, "and the raw y")
+
+// ## Display scale
+
+// **The dummy driver reports no scaling, so this pins the relationships rather than a phone's 2.75.**
+// What holds on every driver is that neither answer is zero — the substitution this binding makes for
+// SDL's failure value — and that the pixel density is exactly the ratio the window's own two sizes
+// already report, which is the definition SDL gives it and is what a binding calling the wrong one of
+// the two functions would break.
+@test
+a_window_reports_a_usable_scale()
+    assert(headless(), "SDL_Init")
+
+    val window = create_window("scale", 320, 240, 0).expect("a window")
+    val density = window.pixel_density()
+    val scale = window.display_scale()
+
+    assert(density > 0.0, "a density of zero would multiply a layout to nothing")
+    assert(scale > 0.0, "and so would a scale")
+
+    val (w, h) = window.size()
+    val (pw, ph) = window.size_in_pixels()
+
+    assert_eq(f32(pw), f32(w) * density, "the density is the ratio of the two widths SDL reports")
+    assert_eq(f32(ph), f32(h) * density, "and of the two heights")
+
+    // The same number for the display the window is on, which is what a program asks before it has a
+    // window to ask about.
+    assert(display_content_scale(window.display()) > 0.0, "a display answers a scale too")
+
+    // **The substitution, pinned at both ends rather than assumed.** A display that does not exist
+    // is the one failure this can provoke on any driver, so it is worth asking the C directly for
+    // the zero and the binding for the one it puts in its place — an assertion that only checked
+    // the wrapper would pass just as well if SDL had answered 1.0 by itself.
+    assert_eq(c.get_display_content_scale(9999), 0.0f32, "SDL says zero for a display it has not got")
+    assert_eq(display_content_scale(9999), 1.0f32, "and this binding says one")
+
+    quit()
 
 // ## Debug text
 

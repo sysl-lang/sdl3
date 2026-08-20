@@ -235,6 +235,98 @@ Where SDL cannot answer, this returns the whole window rather than reporting a f
 one place it differs from the C, and it is deliberate: it is the only thing a caller could usefully
 do with `false`, and it is what SDL itself answers on a platform with no insets.
 
+## The display scale, which is what an interface is laid out in
+
+`window.display_scale()` answers the factor to multiply a size by so that it comes out the same
+*physical* size on every display. Write a button as 44 units tall, multiply by this, and it is a
+44-unit button on a laptop panel, on an external monitor and on a phone. Write it as 44 **pixels**
+and it is a thumb-sized button on one of them and a scratch on another.
+
+```sysl
+val scale = window.display_scale()
+val row   = 44.0 * scale
+```
+
+**It changes while the program runs.** The window is dragged to a monitor with a different setting,
+or the setting itself is changed, and `EventKind.WindowDisplayScaleChanged` says so — ask again
+there rather than reading it once at startup. `EventKind.WindowDisplayChanged` is its neighbour, for
+the window moving to another display at all, and carries the new display's id in `window_data1()`.
+
+**`window.pixel_density()` is the other one and is not a substitute.** The density is only the ratio
+between `size()` and `size_in_pixels()` — how many pixels back a unit of window. The scale combines
+that with what the user asked for in the display's own settings, which is the part that makes a
+phone's 2.75 different from a retina laptop's 2.0. Size a *texture* with the density; lay out with
+the scale.
+
+Both answer `1.0` where SDL cannot tell, rather than the `0.0` the C returns. There is nothing a
+caller could do with zero except substitute one, and a zero reaching a layout multiplies every size
+in it to nothing — an interface drawn perfectly at no size at all, which is a much worse failure
+than an unscaled one. `display_content_scale(id)` is the same number for a display, for a program
+that has to size something before it has a window to ask.
+
+## Touch, and the tap you would otherwise handle twice
+
+`EventKind.FingerDown`, `FingerUp`, `FingerMotion` and `FingerCanceled` are a finger on a
+touchscreen or a trackpad, with `finger_x()`, `finger_y()`, the movement since the last motion, the
+pressure, and the two ids that say which finger on which device.
+
+**Most programs should ignore all four.** SDL synthesizes mouse events from touch, so a tap arrives
+as `MouseButtonDown` with a position already in window coordinates — that is the whole of the input
+for anything that only wants taps, it is what `sysl-lang/androidkit` does, and the same source then
+runs on a desktop. These are for what a mouse cannot say: which finger, how many at once, and how
+hard.
+
+**Read both and every tap is handled twice**, which is the trap this section exists for. SDL
+delivers each touch as a finger event *and* as a synthesized mouse event, so one of the pair has to
+go. Each carries a sentinel naming the device it really came from:
+
+```sysl
+// Keep the finger events, drop the mouse events that were really fingers.
+if e.kind() == EventKind.MouseButtonDown && e.mouse_which() == c.TOUCH_MOUSEID
+    continue
+```
+
+`c.MOUSE_TOUCHID` is the mirror image — the `touch_id()` of a finger event that was really the
+mouse — for a program that would rather keep the mouse events.
+
+**A finger's position is normalized to `0..1`, and every other event's is not.** This is the one
+place the two disagree about units and the disagreement is silent: `0.5` used as a coordinate lands
+in the corner rather than the middle. `finger_pos_in(w, h)` does the multiplication.
+
+```sysl
+val (x, y) = e.finger_pos_in(f32(win_w), f32(win_h))
+```
+
+**`window_id()` is wrong on a touch event — use `finger_window_id()`.** SDL puts the window at the
+*end* of the touch struct rather than at the front where every other variant keeps it, so the
+general accessor reads the low half of the 64-bit touch id and answers a plausible number that is
+not a window. It is the only place in this union where one field is not in one place, and there is
+no way for a single accessor to serve both.
+
+**`FingerCanceled` is the one most easily left out.** The system took the gesture away — an incoming
+call, a notification pulled down, a system back-swipe that started at the edge — and the finger that
+went down will never come up. A widget tracking a drag has to let go on it, or it stays captured by
+a finger that is gone.
+
+## The application lifecycle, which is watched rather than polled
+
+`Terminating`, `LowMemory`, `WillEnterBackground`, `DidEnterBackground`, `WillEnterForeground` and
+`DidEnterForeground` are what the system says when it, rather than the user, decides what the
+program is doing. Android delivers them from `onPause`, `onResume`, `onTrimMemory` and `onDestroy`;
+iOS from the matching `UIApplicationDelegate` methods. On a desktop they barely fire.
+
+**SDL's header says each of these "must be handled in a callback set with SDL_AddEventWatch()", and
+that is not advice.** They arrive synchronously from inside the platform's own callback, while the
+program still has the CPU — and it may not be given it back. A `DidEnterBackground` seen through
+`poll_event` is seen after the system already stopped scheduling the loop that polls, which on
+Android can be after the process has been killed.
+
+```sysl
+add_event_watch(e -> if e.kind() == EventKind.DidEnterBackground then save_everything(app))
+```
+
+They reach the queue as well, which is enough for anything that only wants to stop animating.
+
 ## Text with nothing installed
 
 `renderer.debug_text(x, y, "hello")` draws a line in a fixed 8x8 bitmap font **carried inside SDL
@@ -295,7 +387,7 @@ the answer for anything more.
 sysl test .
 ```
 
-Forty-two tests, run headless against a real SDL3 — the dummy video and audio drivers create
+Forty-eight tests, run headless against a real SDL3 — the dummy video and audio drivers create
 windows, renderers, textures and devices and draw into memory, so nothing here needs a display or a
 sound card.
 
