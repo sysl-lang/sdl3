@@ -5,6 +5,7 @@ import sh.sysl.sdl3.c.{Rect, FRect, FPoint, Vertex}
 import sysl.math.{Float, pi}
 import sysl.slices.as_ptr
 import sysl.buf.{Buf, buf}
+import sysl.text.cstring
 
 // The 2D renderer — an accelerated drawing surface attached to a window.
 //
@@ -72,6 +73,24 @@ struct Renderer
         self.set_draw_color(col)
         c.render_clear(self.handle)
     end clear_to
+
+    // A line of text in SDL's own built-in font, at eight pixels a character.
+    //
+    // **This is the whole of text in SDL3 with no dependencies at all.** It carries a fixed 8x8
+    // bitmap font inside the library, so a program that only wants to say something — a label, a
+    // frame counter, a message on a phone — needs no font file, no `sdl3-ttf`, and nothing shipped
+    // beside the binary. SDL's own documentation is blunt that it is for debugging rather than for
+    // an interface: one size, one face, ASCII, no shaping and no wrapping. Where any of that
+    // matters, `sdl3-ttf` is the answer and this is not.
+    //
+    // It draws in the current draw colour, so `set_draw_color` before it is what chooses the ink.
+    // `SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE` is 8, which is what a caller lays out against — the
+    // constant is in `c` for a program that wants to compute a width.
+    debug_text(&self, x: f32, y: f32, text: string) -> bool
+        val s = cstring(text)
+
+        c.render_debug_text(self.handle, x, y, s.ptr)
+    end debug_text
 
     draw_point(&self, x: f32, y: f32) -> bool = c.render_point(self.handle, x, y)
 

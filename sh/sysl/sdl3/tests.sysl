@@ -960,3 +960,34 @@ a_window_reports_a_safe_area_inside_itself()
     assert_eq(safe.y, 0, "in both axes")
     assert_eq(safe.w, w, "and it is the whole window wide")
     assert_eq(safe.h, h, "and the whole window tall")
+
+// ## Debug text
+
+// **SDL's built-in font, which is the whole of text with no dependencies.** What can be checked
+// headless is that it draws *something* and that it draws it where it was told — so this renders one
+// character into a known spot and reads the pixels back, rather than asserting the call returned
+// true, which a stub would also do.
+@test
+debug_text_draws_where_it_is_told()
+    assert(headless(), "SDL_Init")
+
+    val window = create_window("debug text", 64, 32, 0).expect("a window")
+    val renderer = window.create_renderer().expect("a renderer")
+
+    renderer.clear_to(Color(0, 0, 0, 255))
+    renderer.set_draw_color(Color(255, 255, 255, 255))
+    assert(renderer.debug_text(8.0, 8.0, "X"), "SDL_RenderDebugText")
+
+    val shot = renderer.read_pixels().expect("the frame")
+
+    // Somewhere in the 8x8 cell at (8, 8) is ink, and the corner well away from it is untouched.
+    var lit = 0
+
+    for y in 8..<16
+        for x in 8..<16
+            if shot.read_pixel(x, y).expect("a pixel").r > 128u8 then lit += 1
+
+    assert(lit > 0, "the glyph put something in its cell")
+    assert_eq(shot.read_pixel(1, 1).expect("a pixel").r, 0u8, "and left the background alone")
+
+    quit()

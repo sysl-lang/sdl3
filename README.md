@@ -235,6 +235,25 @@ Where SDL cannot answer, this returns the whole window rather than reporting a f
 one place it differs from the C, and it is deliberate: it is the only thing a caller could usefully
 do with `false`, and it is what SDL itself answers on a platform with no insets.
 
+## Text with nothing installed
+
+`renderer.debug_text(x, y, "hello")` draws a line in a fixed 8x8 bitmap font **carried inside SDL
+itself**, so a program that only wants to say something needs no font file, no `sdl3-ttf`, and
+nothing shipped beside the binary.
+
+```sysl
+renderer.set_draw_color(rgb(220, 220, 230))
+renderer.debug_text(16.0, 16.0, "hello from sysl")
+```
+
+It draws in the current draw colour, so `set_draw_color` is what chooses the ink, and
+`c.DEBUG_TEXT_FONT_CHARACTER_SIZE` is 8 for a caller that wants to compute a width.
+
+**SDL's own documentation is blunt that it is for debugging rather than for an interface**: one size,
+one face, ASCII, no shaping, no wrapping. Where any of that matters `sdl3-ttf` is the answer and this
+is not. What it is very good at is the first thing a new program does — putting a legible line on the
+screen before anything else works.
+
 ## Reading the frame back
 
 `renderer.read_pixels()` answers what is in the target as a `&Surface`, which is what a screenshot,

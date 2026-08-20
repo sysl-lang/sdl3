@@ -599,6 +599,7 @@ extern "SDL_SetRenderDrawColorFloat" set_render_draw_color_float(renderer: *Rend
                                                                 b: f32, a: f32) -> bool
 extern "SDL_SetRenderDrawBlendMode" set_render_draw_blend_mode(renderer: *Renderer, mode: u32) -> bool
 extern "SDL_RenderClear" render_clear(renderer: *Renderer) -> bool
+extern "SDL_RenderDebugText" render_debug_text(renderer: *Renderer, x: f32, y: f32, str: *u8) -> bool
 extern "SDL_RenderPoint" render_point(renderer: *Renderer, x: f32, y: f32) -> bool
 extern "SDL_RenderLine" render_line(renderer: *Renderer, x1: f32, y1: f32, x2: f32, y2: f32) -> bool
 extern "SDL_RenderRect" render_rect(renderer: *Renderer, rect: *FRect) -> bool
