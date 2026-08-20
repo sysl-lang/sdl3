@@ -121,6 +121,8 @@ c const
     EVENT_DID_ENTER_BACKGROUND:         u32 = "SDL_EVENT_DID_ENTER_BACKGROUND"
     EVENT_WILL_ENTER_FOREGROUND:        u32 = "SDL_EVENT_WILL_ENTER_FOREGROUND"
     EVENT_DID_ENTER_FOREGROUND:         u32 = "SDL_EVENT_DID_ENTER_FOREGROUND"
+    EVENT_LOCALE_CHANGED:               u32 = "SDL_EVENT_LOCALE_CHANGED"
+    EVENT_SYSTEM_THEME_CHANGED:         u32 = "SDL_EVENT_SYSTEM_THEME_CHANGED"
     EVENT_WINDOW_SHOWN:                 u32 = "SDL_EVENT_WINDOW_SHOWN"
     EVENT_WINDOW_HIDDEN:                u32 = "SDL_EVENT_WINDOW_HIDDEN"
     EVENT_WINDOW_EXPOSED:               u32 = "SDL_EVENT_WINDOW_EXPOSED"
@@ -169,6 +171,35 @@ c const
 c const
     TOUCH_MOUSEID: u32 = "SDL_TOUCH_MOUSEID"
     MOUSE_TOUCHID: u64 = "SDL_MOUSE_TOUCHID"
+
+// ### What a text field is for (SDL_TextInputType)
+//
+// **This is what chooses the keyboard a phone puts on the screen**, and it is the difference between
+// a PIN field offering ten digits and offering a full QWERTY. On a desktop it changes nothing, which
+// is why it is easy to leave out and be told about later.
+c const
+    TEXTINPUT_TYPE_TEXT:                    i32 = "SDL_TEXTINPUT_TYPE_TEXT"
+    TEXTINPUT_TYPE_TEXT_NAME:               i32 = "SDL_TEXTINPUT_TYPE_TEXT_NAME"
+    TEXTINPUT_TYPE_TEXT_EMAIL:              i32 = "SDL_TEXTINPUT_TYPE_TEXT_EMAIL"
+    TEXTINPUT_TYPE_TEXT_USERNAME:           i32 = "SDL_TEXTINPUT_TYPE_TEXT_USERNAME"
+    TEXTINPUT_TYPE_TEXT_PASSWORD_HIDDEN:    i32 = "SDL_TEXTINPUT_TYPE_TEXT_PASSWORD_HIDDEN"
+    TEXTINPUT_TYPE_TEXT_PASSWORD_VISIBLE:   i32 = "SDL_TEXTINPUT_TYPE_TEXT_PASSWORD_VISIBLE"
+    TEXTINPUT_TYPE_NUMBER:                  i32 = "SDL_TEXTINPUT_TYPE_NUMBER"
+    TEXTINPUT_TYPE_NUMBER_PASSWORD_HIDDEN:  i32 = "SDL_TEXTINPUT_TYPE_NUMBER_PASSWORD_HIDDEN"
+    TEXTINPUT_TYPE_NUMBER_PASSWORD_VISIBLE: i32 = "SDL_TEXTINPUT_TYPE_NUMBER_PASSWORD_VISIBLE"
+
+// ### Automatic capitalization (SDL_Capitalization)
+c const
+    CAPITALIZE_NONE:      i32 = "SDL_CAPITALIZE_NONE"
+    CAPITALIZE_SENTENCES: i32 = "SDL_CAPITALIZE_SENTENCES"
+    CAPITALIZE_WORDS:     i32 = "SDL_CAPITALIZE_WORDS"
+    CAPITALIZE_LETTERS:   i32 = "SDL_CAPITALIZE_LETTERS"
+
+// ### The system's light or dark setting (SDL_SystemTheme)
+c const
+    SYSTEM_THEME_UNKNOWN: i32 = "SDL_SYSTEM_THEME_UNKNOWN"
+    SYSTEM_THEME_LIGHT:   i32 = "SDL_SYSTEM_THEME_LIGHT"
+    SYSTEM_THEME_DARK:    i32 = "SDL_SYSTEM_THEME_DARK"
 
 // ### Mouse buttons
 c const
@@ -560,6 +591,22 @@ struct TextEvent
     text: *u8
     tail: [96]u8
 
+// **`SDL_TextEditingEvent` is `SDL_TextInputEvent` with two more words on the end**, and the two
+// arrive under different kinds — so the shared prefix is why `Event.text` reads either and the
+// suffix is why this needs a view of its own. `start` and `length` are the selected range within the
+// composition, both `-1` when the platform does not say.
+@align(8)
+struct TextEditingEvent
+    kind: u32
+    reserved: u32
+    timestamp: u64
+    window_id: u32
+    pad: u32
+    text: *u8
+    start: i32
+    length: i32
+    tail: [88]u8
+
 @align(8)
 struct DropEvent
     kind: u32
@@ -637,7 +684,16 @@ extern "SDL_HideWindow" hide_window(window: *Window) -> bool
 extern "SDL_RaiseWindow" raise_window(window: *Window) -> bool
 extern "SDL_GetWindowID" get_window_id(window: *Window) -> u32
 extern "SDL_StartTextInput" start_text_input(window: *Window) -> bool
+extern "SDL_StartTextInputWithProperties" start_text_input_with_properties(window: *Window,
+                                                                          props: u32) -> bool
 extern "SDL_StopTextInput" stop_text_input(window: *Window) -> bool
+extern "SDL_TextInputActive" text_input_active(window: *Window) -> bool
+extern "SDL_ClearComposition" clear_composition(window: *Window) -> bool
+extern "SDL_SetTextInputArea" set_text_input_area(window: *Window, rect: *Rect, cursor: i32) -> bool
+extern "SDL_GetTextInputArea" get_text_input_area(window: *Window, rect: *Rect,
+                                                  cursor: *i32) -> bool
+extern "SDL_HasScreenKeyboardSupport" has_screen_keyboard_support() -> bool
+extern "SDL_ScreenKeyboardShown" screen_keyboard_shown(window: *Window) -> bool
 
 extern "SDL_GetPrimaryDisplay" get_primary_display() -> u32
 extern "SDL_GetDisplayForWindow" get_display_for_window(window: *Window) -> u32
@@ -651,6 +707,8 @@ extern "SDL_GetDisplayBounds" get_display_bounds(display: u32, rect: *Rect) -> b
 extern "SDL_GetWindowPixelDensity" get_window_pixel_density(window: *Window) -> f32
 extern "SDL_GetWindowDisplayScale" get_window_display_scale(window: *Window) -> f32
 extern "SDL_GetDisplayContentScale" get_display_content_scale(display: u32) -> f32
+
+extern "SDL_GetSystemTheme" get_system_theme() -> i32
 
 // ## The renderer
 
@@ -777,6 +835,10 @@ extern "SDL_GetClipboardText" get_clipboard_text() -> *u8
 extern "SDL_SetClipboardText" set_clipboard_text(text: *u8) -> bool
 extern "SDL_HasClipboardText" has_clipboard_text() -> bool
 extern "SDL_GetPreferredLocales" get_preferred_locales(count: *i32) -> **Locale
+
+// `SDL_OpenURL` lives in `SDL_misc.h` rather than beside these, and is here because it is the other
+// call that hands something to the rest of the system and gets nothing back.
+extern "SDL_OpenURL" open_url(url: *u8) -> bool
 
 // ## File dialogs
 

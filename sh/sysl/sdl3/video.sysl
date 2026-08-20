@@ -4,7 +4,12 @@ import sh.sysl.sdl3.c
 import sh.sysl.sdl3.c.{Rect, FRect, FPoint}
 import sysl.text.cstring
 
-// Windows and displays.
+// Windows, displays, and the text input that belongs to a window.
+//
+// **Text input is here rather than beside the keyboard in `input.sysl` because SDL scopes it to a
+// window**, which is what lets two fields in two windows be edited independently — and because on a
+// phone it is a window question rather than a keyboard one: where the field is decides where the
+// on-screen keyboard puts itself and what it covers.
 //
 // **A handle is reached through `&T` and frees what it points at when the last reference goes.**
 // SDL allocates the object and SDL frees it, so there is no size for this side to know — but there
@@ -19,6 +24,149 @@ import sysl.text.cstring
 // **A rectangle is `c.Rect` or `c.FRect`** — SDL's own layout, since these cross to C by pointer
 // and there is nothing about four numbers for this layer to improve. `rect` and `frect` build one
 // without naming the type; a consumer that wants the name imports it from `c`.
+
+// What a field is for, which is what a phone reads to decide which keyboard to put on the screen. On
+// a desktop it changes nothing — which is why a field that offers a PIN pad on a phone and a full
+// keyboard on a laptop is easy to get wrong and easy not to notice.
+enum TextInputType
+    Text
+    Name
+    Email
+    Username
+    PasswordHidden
+    PasswordVisible
+    Number
+    PinHidden
+    PinVisible
+
+    Other(code: i32)
+
+    code(self) -> i32
+        self match
+            Text -> c.TEXTINPUT_TYPE_TEXT
+            Name -> c.TEXTINPUT_TYPE_TEXT_NAME
+            Email -> c.TEXTINPUT_TYPE_TEXT_EMAIL
+            Username -> c.TEXTINPUT_TYPE_TEXT_USERNAME
+            PasswordHidden -> c.TEXTINPUT_TYPE_TEXT_PASSWORD_HIDDEN
+            PasswordVisible -> c.TEXTINPUT_TYPE_TEXT_PASSWORD_VISIBLE
+            Number -> c.TEXTINPUT_TYPE_NUMBER
+            PinHidden -> c.TEXTINPUT_TYPE_NUMBER_PASSWORD_HIDDEN
+            PinVisible -> c.TEXTINPUT_TYPE_NUMBER_PASSWORD_VISIBLE
+            Other(n) -> n
+
+    of(code: i32) -> TextInputType
+        code match
+            c.TEXTINPUT_TYPE_TEXT -> Text
+            c.TEXTINPUT_TYPE_TEXT_NAME -> Name
+            c.TEXTINPUT_TYPE_TEXT_EMAIL -> Email
+            c.TEXTINPUT_TYPE_TEXT_USERNAME -> Username
+            c.TEXTINPUT_TYPE_TEXT_PASSWORD_HIDDEN -> PasswordHidden
+            c.TEXTINPUT_TYPE_TEXT_PASSWORD_VISIBLE -> PasswordVisible
+            c.TEXTINPUT_TYPE_NUMBER -> Number
+            c.TEXTINPUT_TYPE_NUMBER_PASSWORD_HIDDEN -> PinHidden
+            c.TEXTINPUT_TYPE_NUMBER_PASSWORD_VISIBLE -> PinVisible
+            n -> Other(n)
+end TextInputType
+
+impl Eq for TextInputType
+    eq(self, other: TextInputType) -> bool = self.code() == other.code()
+
+impl Display for TextInputType
+    display(self, out: *Writer, fmt: FormatSpec)
+        val s = self match
+            Text -> "text"
+            Name -> "a name"
+            Email -> "an e-mail address"
+            Username -> "a username"
+            PasswordHidden -> "a hidden password"
+            PasswordVisible -> "a visible password"
+            Number -> "a number"
+            PinHidden -> "a hidden pin"
+            PinVisible -> "a visible pin"
+            Other(_) -> "an input type this binding does not name"
+
+        display_str(s, out, fmt)
+
+// What the platform capitalizes on its own while the user types.
+enum Capitalization
+    // `Off` rather than `None`, because an enum variant is reachable unqualified inside the module
+    // and a second `None` here would shadow `Option`'s for every file in it. `BlendMode.Off` is the
+    // same rename for the same reason.
+    Off
+    Sentences
+    Words
+    Letters
+
+    Other(code: i32)
+
+    code(self) -> i32
+        self match
+            Off -> c.CAPITALIZE_NONE
+            Sentences -> c.CAPITALIZE_SENTENCES
+            Words -> c.CAPITALIZE_WORDS
+            Letters -> c.CAPITALIZE_LETTERS
+            Other(n) -> n
+
+    of(code: i32) -> Capitalization
+        code match
+            c.CAPITALIZE_NONE -> Off
+            c.CAPITALIZE_SENTENCES -> Sentences
+            c.CAPITALIZE_WORDS -> Words
+            c.CAPITALIZE_LETTERS -> Letters
+            n -> Other(n)
+end Capitalization
+
+impl Eq for Capitalization
+    eq(self, other: Capitalization) -> bool = self.code() == other.code()
+
+impl Display for Capitalization
+    display(self, out: *Writer, fmt: FormatSpec)
+        val s = self match
+            Off -> "off"
+            Sentences -> "sentences"
+            Words -> "words"
+            Letters -> "letters"
+            Other(_) -> "a capitalization this binding does not name"
+
+        display_str(s, out, fmt)
+
+// Whether the system is set light or dark. `Unknown` is an ordinary answer and not a failure — a
+// platform that has no such setting reports it, and an interface should have a colour scheme it
+// falls back to rather than treating it as an error.
+enum SystemTheme
+    Unknown
+    Light
+    Dark
+
+    Other(code: i32)
+
+    code(self) -> i32
+        self match
+            Unknown -> c.SYSTEM_THEME_UNKNOWN
+            Light -> c.SYSTEM_THEME_LIGHT
+            Dark -> c.SYSTEM_THEME_DARK
+            Other(n) -> n
+
+    of(code: i32) -> SystemTheme
+        code match
+            c.SYSTEM_THEME_UNKNOWN -> Unknown
+            c.SYSTEM_THEME_LIGHT -> Light
+            c.SYSTEM_THEME_DARK -> Dark
+            n -> Other(n)
+end SystemTheme
+
+impl Eq for SystemTheme
+    eq(self, other: SystemTheme) -> bool = self.code() == other.code()
+
+impl Display for SystemTheme
+    display(self, out: *Writer, fmt: FormatSpec)
+        val s = self match
+            Unknown -> "unknown"
+            Light -> "light"
+            Dark -> "dark"
+            Other(_) -> "a theme this binding does not name"
+
+        display_str(s, out, fmt)
 
 // A rectangle in integer screen coordinates.
 rect(x: i32, y: i32, w: i32, h: i32) -> Rect = Rect(x, y, w, h)
@@ -181,7 +329,88 @@ struct Window
     // it loses it; the typed text is read with `Event.text`.
     start_text_input(&self) -> bool = c.start_text_input(self.handle)
 
+    // The same, saying what the field is for — which is what a phone reads to choose the keyboard it
+    // puts on the screen. A `Number` field gets a digit pad, a `PasswordHidden` one gets no
+    // suggestions and no history, an `Email` one gets an `@` on the front row.
+    //
+    // **The three `Option` parameters mean "let SDL decide", and passing a value where you meant
+    // that is the mistake this shape exists to prevent.** SDL derives each of them from the input
+    // type when it is not set: capitalization is `Sentences` for ordinary text, `Words` for a name,
+    // and `None` for an e-mail address, a username or a password — so a wrapper that always sent a
+    // capitalization would capitalize e-mail addresses, and one that always sent `Sentences` would
+    // do it in every field. `multiline` is likewise derived, from `SDL_HINT_RETURN_KEY_HIDES_IME`.
+    // Only what is asked for is set.
+    //
+    // **The `Option[T].None` spelling is a compiler requirement rather than decoration.** A bare
+    // `None` as a default value is accepted on a free function and refused on a method — `dialog.sysl`
+    // writes `window: Option[&Window] = None` and it compiles, while the same default here does not,
+    // for a value type or a reference alike. `Some(x)` as a default on a method is fine, so it is the
+    // nullary variant that fails to take its type argument from the parameter it is declared against.
+    start_text_input_with(&self, kind: TextInputType = TextInputType.Text,
+                          capitalize: Option[Capitalization] = Option[Capitalization].None,
+                          autocorrect: Option[bool] = Option[bool].None,
+                          multiline: Option[bool] = Option[bool].None) -> bool
+        val props = create_properties()
+
+        set_number_property(props, "SDL.textinput.type", i64(kind.code()))
+
+        capitalize match
+            Some(cap) -> set_number_property(props, "SDL.textinput.capitalization", i64(cap.code()))
+            None -> ()
+
+        autocorrect match
+            Some(on) -> set_boolean_property(props, "SDL.textinput.autocorrect", on)
+            None -> ()
+
+        multiline match
+            Some(on) -> set_boolean_property(props, "SDL.textinput.multiline", on)
+            None -> ()
+
+        val ok = c.start_text_input_with_properties(self.handle, props)
+
+        destroy_properties(props)
+        ok
+    end start_text_input_with
+
     stop_text_input(&self) -> bool = c.stop_text_input(self.handle)
+
+    // Whether text input is on for this window, which is what a field asks rather than keeping its
+    // own flag beside SDL's.
+    text_input_active(&self) -> bool = c.text_input_active(self.handle)
+
+    // Throw away an input method's composition in progress. A field that loses focus, or is cleared
+    // while a CJK keyboard is mid-word, calls this — otherwise the half-formed text commits into
+    // whatever takes focus next.
+    clear_composition(&self) -> bool = c.clear_composition(self.handle)
+
+    // **Where the text being edited is, and it is not optional on a phone.** The platform needs the
+    // rectangle for two things: to put an input method's suggestion window beside the text rather
+    // than over it, and — the one that matters on a small screen — to scroll the field above the
+    // on-screen keyboard when the keyboard comes up. Without it a field in the lower half of a phone
+    // is covered by the keyboard the moment it is tapped, and the user types blind.
+    //
+    // `cursor` is the caret's offset from the rectangle's left edge, in the same window coordinates.
+    // Call it again whenever the caret or the layout moves.
+    set_text_input_area(&self, r: Rect, cursor: i32) -> bool
+        var v = r
+
+        c.set_text_input_area(self.handle, &v, cursor)
+    end set_text_input_area
+
+    // Forget the area, which is what a field does when it stops being edited.
+    clear_text_input_area(&self) -> bool = c.set_text_input_area(self.handle, null, 0)
+
+    // What was last set, or nothing where SDL cannot say.
+    text_input_area(&self) -> Option[(Rect, i32)]
+        var r = Rect(0, 0, 0, 0)
+        var cursor: i32 = 0
+
+        if c.get_text_input_area(self.handle, &r, &cursor) then Some((r, cursor)) else None
+    end text_input_area
+
+    // Whether the on-screen keyboard is up *right now*. A layout that has to keep a field visible
+    // asks this and shrinks itself; a desktop always answers false.
+    screen_keyboard_shown(&self) -> bool = c.screen_keyboard_shown(self.handle)
 
     // The display this window is mostly on, or 0 if SDL cannot tell.
     display(&self) -> u32 = c.get_display_for_window(self.handle)
@@ -200,6 +429,18 @@ create_window(title: string, width: i32, height: i32, flags: u64 = 0) -> Option[
 
     if w == null then None else Some(Window(w))
 end create_window
+
+// Whether this platform has an on-screen keyboard at all. It is a property of the machine rather
+// than of a window, and it is what decides whether a program needs to lay out around one — a desktop
+// answers false and a phone answers true whether or not the keyboard happens to be up.
+has_screen_keyboard_support() -> bool = c.has_screen_keyboard_support()
+
+// Whether the system is set light or dark.
+//
+// **Ask again on `EventKind.SystemThemeChanged` rather than reading it once.** A phone switches at
+// sunset on a schedule the program is not told about in advance, and a desktop switches when the
+// user does — an interface that read this at startup is the wrong colour for the rest of the session.
+system_theme() -> SystemTheme = SystemTheme.of(c.get_system_theme())
 
 // The id of the primary display, or 0 if none is reported.
 primary_display() -> u32 = c.get_primary_display()

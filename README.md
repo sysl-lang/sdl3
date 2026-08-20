@@ -1,11 +1,13 @@
 # sdl3
 
-SDL3 for sysl — a window, an accelerated renderer, the event queue, keyboard and mouse, the
+SDL3 for sysl — a window, an accelerated renderer, the event queue, keyboard, mouse and touch, the
 clipboard, the system file dialog, queued audio, and the monotonic clock a frame loop is paced by.
+It binds what a phone needs as well as what a desktop does: the safe area, the display scale, the
+on-screen keyboard, and the lifecycle events an app is stopped and restarted by.
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.2.0" }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.2.5" }
 }
 ```
 
@@ -153,8 +155,9 @@ said it in a comment beginning *"never for what `default_cursor` answers"*.
 
 ## Enumerations rather than piles of constants
 
-Ten of them: `EventKind`, `PixelFormat`, `Colorspace`, `BlendMode`, `TextureAccess`, `ScaleMode`,
-`MouseButton`, `AudioFormat`, `SystemCursor` and `FileDialogKind`. Each has a `code` for going out
+Thirteen of them: `EventKind`, `PixelFormat`, `Colorspace`, `BlendMode`, `TextureAccess`,
+`ScaleMode`, `MouseButton`, `AudioFormat`, `SystemCursor`, `FileDialogKind`, `TextInputType`,
+`Capitalization` and `SystemTheme`. Each has a `code` for going out
 to SDL; the ones SDL ever *answers* also have an `of` and an `Other` arm for a value this package
 does not name, which is an ordinary answer rather than a failure.
 
@@ -327,6 +330,83 @@ add_event_watch(e -> if e.kind() == EventKind.DidEnterBackground then save_every
 
 They reach the queue as well, which is enough for anything that only wants to stop animating.
 
+## A text field on a phone
+
+Three things separate a text field that works on a phone from one that only works on a desktop, and
+none of them is the typing.
+
+**Tell the platform where the field is, or the keyboard covers it.** `window.set_text_input_area(r,
+cursor)` is how the system knows what to scroll above the on-screen keyboard, and where to put an
+input method's suggestion window so it sits beside the text rather than over it. Without it a field
+in the lower half of a phone screen disappears behind the keyboard the moment it is tapped and the
+user types blind.
+
+```sysl
+window.start_text_input()
+window.set_text_input_area(rect(x, y, w, h), caret_x - x)
+```
+
+Call it again whenever the caret or the layout moves. `clear_text_input_area()` when the field stops
+being edited.
+
+**Say what the field is for, or a PIN field offers a full QWERTY.**
+
+```sysl
+window.start_text_input_with(TextInputType.Email)
+window.start_text_input_with(TextInputType.PinHidden)
+```
+
+Nine types — text, name, e-mail, username, password hidden or visible, number, PIN hidden or
+visible. On a desktop none of it changes anything, which is exactly why it is easy to leave out and
+be told about by somebody holding a phone.
+
+The three optional properties are `Option` because **SDL derives them from the type when they are not
+set**, and passing a value where you meant "let SDL decide" is worse than not passing one:
+capitalization defaults to sentences for ordinary text, words for a name, and *none* for an e-mail
+address, a username or a password. Send `Capitalization.Sentences` to every field and you capitalize
+e-mail addresses.
+
+```sysl
+window.start_text_input_with(TextInputType.Text, Some(Capitalization.Words), Some(false), Some(true))
+```
+
+**Know whether the keyboard is up.** `window.screen_keyboard_shown()` for right now, and
+`has_screen_keyboard_support()` for whether this machine has one at all — the second is what decides
+whether a layout needs to reserve space for it, and a desktop answers false to both.
+
+**And for an input method, the composing region.** `EventKind.TextEditing` carries the text being
+formed before it commits; `composition_start()` and `composition_length()` are the part of it the
+input method has selected, which is what draws the underline a CJK keyboard shows mid-word. Both are
+`-1` where the platform does not say, which is ordinary — underline the whole composition then.
+`window.clear_composition()` throws away a composition in progress, which a field does when it loses
+focus so the half-formed text does not commit into whatever takes focus next.
+
+`window.text_input_active()` answers whether SDL thinks the field is being edited, so a widget need
+not keep that flag itself and keep it synchronised.
+
+## Light or dark
+
+```sysl
+val bg = if system_theme() == SystemTheme.Dark then rgb(18, 18, 22) else rgb(250, 250, 252)
+```
+
+`Unknown` is an ordinary answer rather than a failure — a platform with no such setting reports it,
+so an interface wants a scheme it falls back to rather than an error path.
+
+**Ask again on `EventKind.SystemThemeChanged`.** A phone switches at sunset on a schedule the program
+is never told in advance, and a desktop switches when the user does. Read once at startup and the
+interface is the wrong colour for the rest of the session. `EventKind.LocaleChanged` is its
+neighbour, for `preferred_locales()`.
+
+## Opening a URL
+
+`open_url("https://sysl.sh")` hands a URL to whatever the system opens it with — a browser for
+`https:`, a mail client for `mailto:`, the file manager for `file:`. It is how a link in an interface
+works at all, since a program drawing its own pixels has no link for the platform to notice.
+
+**`true` means the system accepted it, not that the user saw anything**, and nothing comes back. On a
+phone the program is backgrounded by the act of opening one, so the lifecycle events fire.
+
 ## Text with nothing installed
 
 `renderer.debug_text(x, y, "hello")` draws a line in a fixed 8x8 bitmap font **carried inside SDL
@@ -387,7 +467,7 @@ the answer for anything more.
 sysl test .
 ```
 
-Forty-eight tests, run headless against a real SDL3 — the dummy video and audio drivers create
+Fifty-five tests, run headless against a real SDL3 — the dummy video and audio drivers create
 windows, renderers, textures and devices and draw into memory, so nothing here needs a display or a
 sound card.
 

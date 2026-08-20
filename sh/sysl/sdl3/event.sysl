@@ -45,6 +45,12 @@ enum EventKind
     WillEnterForeground
     DidEnterForeground
 
+    // The user changed something the whole interface reads. `system_theme()` and
+    // `preferred_locales()` answer the new value — neither event carries it, because the setting is
+    // asked for rather than delivered.
+    LocaleChanged
+    SystemThemeChanged
+
     WindowShown
     WindowHidden
     WindowExposed
@@ -141,6 +147,8 @@ enum EventKind
             DidEnterBackground -> c.EVENT_DID_ENTER_BACKGROUND
             WillEnterForeground -> c.EVENT_WILL_ENTER_FOREGROUND
             DidEnterForeground -> c.EVENT_DID_ENTER_FOREGROUND
+            LocaleChanged -> c.EVENT_LOCALE_CHANGED
+            SystemThemeChanged -> c.EVENT_SYSTEM_THEME_CHANGED
             WindowShown -> c.EVENT_WINDOW_SHOWN
             WindowHidden -> c.EVENT_WINDOW_HIDDEN
             WindowExposed -> c.EVENT_WINDOW_EXPOSED
@@ -186,6 +194,8 @@ enum EventKind
             c.EVENT_DID_ENTER_BACKGROUND -> DidEnterBackground
             c.EVENT_WILL_ENTER_FOREGROUND -> WillEnterForeground
             c.EVENT_DID_ENTER_FOREGROUND -> DidEnterForeground
+            c.EVENT_LOCALE_CHANGED -> LocaleChanged
+            c.EVENT_SYSTEM_THEME_CHANGED -> SystemThemeChanged
             c.EVENT_WINDOW_SHOWN -> WindowShown
             c.EVENT_WINDOW_HIDDEN -> WindowHidden
             c.EVENT_WINDOW_EXPOSED -> WindowExposed
@@ -236,6 +246,8 @@ impl Display for EventKind
             DidEnterBackground -> "did enter background"
             WillEnterForeground -> "will enter foreground"
             DidEnterForeground -> "did enter foreground"
+            LocaleChanged -> "locale changed"
+            SystemThemeChanged -> "system theme changed"
             WindowShown -> "window shown"
             WindowHidden -> "window hidden"
             WindowExposed -> "window exposed"
@@ -384,6 +396,22 @@ struct Event
 
         if p == null then "" else from_cstring(p).unwrap_or("")
     end text
+
+    private editing(self) -> *c.TextEditingEvent = ptr_cast(&self.rec)
+
+    // **The part of a `TextEditing` composition the input method has selected**, as an offset and a
+    // length into the `text` above. This is what draws the underline a CJK or accent-composing
+    // keyboard shows while a word is being formed, and without it a field can show the composing
+    // text but not which of it is live.
+    //
+    // Both are **`-1` when the platform does not say**, which is an ordinary answer rather than a
+    // failure — several platforms report the composition and not the range within it. A field that
+    // gets `-1` underlines the whole composition.
+    //
+    // They read the two words `SDL_TextEditingEvent` has past the end of `SDL_TextInputEvent`, so
+    // they are meaningful for `TextEditing` alone. `text` is in the shared prefix and reads either.
+    composition_start(self) -> i32 = self.editing().start
+    composition_length(self) -> i32 = self.editing().length
 
     // ## Drag and drop
 

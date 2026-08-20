@@ -117,6 +117,19 @@ end reset_hint
 // has to hand off rather than do itself.
 is_main_thread() -> bool = c.is_main_thread()
 
+// Hand a URL to whatever the system opens it with — a browser for `https:`, a mail client for
+// `mailto:`, the file manager for `file:`. This is how a link in an interface works, since a program
+// drawing its own pixels has no link for the platform to notice.
+//
+// **`true` means the system accepted it, not that the user saw anything.** On a phone the program is
+// backgrounded by the act of opening one, so the lifecycle events fire; on a desktop the window may
+// simply lose focus. Nothing comes back either way.
+open_url(url: string) -> bool
+    val u = cstring(url)
+
+    c.open_url(u.ptr)
+end open_url
+
 // A hint's name is a string rather than a number, so these are the one group of SDL's constants
 // `c const` cannot answer for — `15 §7` refuses a string from C deliberately, since it would have
 // to be written with two quotings for one value.

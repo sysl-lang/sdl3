@@ -60,6 +60,7 @@ every_event_view_is_the_size_of_the_union()
     assert_eq(sizeof(c.MouseWheelEvent), 128usize, "the wheel view")
     assert_eq(sizeof(c.TouchFingerEvent), 128usize, "the touch view")
     assert_eq(sizeof(c.TextEvent), 128usize, "the text view")
+    assert_eq(sizeof(c.TextEditingEvent), 128usize, "the composition view")
     assert_eq(sizeof(c.DropEvent), 128usize, "the drop view")
     assert_eq(sizeof(c.WindowEvent), 128usize, "the window view")
     assert_eq(sizeof(c.UserEvent), 128usize, "the user view")
@@ -185,6 +186,11 @@ an_event_kind_comes_back_as_itself()
     assert_eq(EventKind.WindowDisplayScaleChanged.code(), c.EVENT_WINDOW_DISPLAY_SCALE_CHANGED,
         "and back")
 
+    assert_eq(EventKind.of(c.EVENT_LOCALE_CHANGED), EventKind.LocaleChanged, "locale changed")
+    assert_eq(EventKind.of(c.EVENT_SYSTEM_THEME_CHANGED), EventKind.SystemThemeChanged,
+        "system theme changed")
+    assert_eq(EventKind.SystemThemeChanged.code(), c.EVENT_SYSTEM_THEME_CHANGED, "and back")
+
     // A gamepad axis, which this package does not name. It is an ordinary answer.
     assert_eq(EventKind.of(0x650u32), EventKind.Other(0x650), "an event with no variant here")
     assert_eq(EventKind.Other(0x650).code(), 0x650u32, "and it carries its number back out")
@@ -255,6 +261,43 @@ the_system_cursors_are_sdls_own_numbers()
     assert_eq(SystemCursor.SwResize.code(), c.SYSTEM_CURSOR_SW_RESIZE, "sw")
     assert_eq(SystemCursor.WResize.code(), c.SYSTEM_CURSOR_W_RESIZE, "w")
 
+// **Nine values in SDL's own order, and six of them are two pairs and a near-pair.** Text/name,
+// password hidden/visible, PIN hidden/visible: a table that transposed either pair would offer a
+// visible password field where a hidden one was asked for, which is a security defect rather than a
+// cosmetic one and is invisible on the desktop where most of the development happens.
+@test
+the_text_input_types_are_sdls_own_numbers()
+    assert_eq(TextInputType.Text.code(), c.TEXTINPUT_TYPE_TEXT, "text")
+    assert_eq(TextInputType.Name.code(), c.TEXTINPUT_TYPE_TEXT_NAME, "a name")
+    assert_eq(TextInputType.Email.code(), c.TEXTINPUT_TYPE_TEXT_EMAIL, "an e-mail address")
+    assert_eq(TextInputType.Username.code(), c.TEXTINPUT_TYPE_TEXT_USERNAME, "a username")
+    assert_eq(TextInputType.PasswordHidden.code(), c.TEXTINPUT_TYPE_TEXT_PASSWORD_HIDDEN,
+        "a hidden password")
+    assert_eq(TextInputType.PasswordVisible.code(), c.TEXTINPUT_TYPE_TEXT_PASSWORD_VISIBLE,
+        "a visible password, which is the one beside it")
+    assert_eq(TextInputType.Number.code(), c.TEXTINPUT_TYPE_NUMBER, "a number")
+    assert_eq(TextInputType.PinHidden.code(), c.TEXTINPUT_TYPE_NUMBER_PASSWORD_HIDDEN, "a hidden pin")
+    assert_eq(TextInputType.PinVisible.code(), c.TEXTINPUT_TYPE_NUMBER_PASSWORD_VISIBLE,
+        "and a visible pin")
+
+    assert_eq(TextInputType.of(c.TEXTINPUT_TYPE_TEXT_PASSWORD_HIDDEN), TextInputType.PasswordHidden,
+        "and back, for the pair that matters most")
+    assert_eq(TextInputType.of(c.TEXTINPUT_TYPE_NUMBER), TextInputType.Number, "and back")
+    assert_eq(TextInputType.of(99), TextInputType.Other(99), "an input type with no name")
+
+@test
+the_capitalizations_and_themes_are_sdls_own_numbers()
+    assert_eq(Capitalization.Off.code(), c.CAPITALIZE_NONE, "none")
+    assert_eq(Capitalization.Sentences.code(), c.CAPITALIZE_SENTENCES, "sentences")
+    assert_eq(Capitalization.Words.code(), c.CAPITALIZE_WORDS, "words")
+    assert_eq(Capitalization.Letters.code(), c.CAPITALIZE_LETTERS, "letters")
+    assert_eq(Capitalization.of(c.CAPITALIZE_WORDS), Capitalization.Words, "and back")
+
+    assert_eq(SystemTheme.Unknown.code(), c.SYSTEM_THEME_UNKNOWN, "unknown")
+    assert_eq(SystemTheme.Light.code(), c.SYSTEM_THEME_LIGHT, "light")
+    assert_eq(SystemTheme.Dark.code(), c.SYSTEM_THEME_DARK, "dark")
+    assert_eq(SystemTheme.of(c.SYSTEM_THEME_DARK), SystemTheme.Dark, "and back")
+
 // An enumeration that printed its number would be no better than the number, so each says a word.
 @test
 the_enums_print_as_words()
@@ -262,6 +305,9 @@ the_enums_print_as_words()
     assert_eq(f"${EventKind.Other(0x650)}", "an event this binding does not name", "and an unnamed one")
     assert_eq(f"${EventKind.FingerCanceled}", "finger canceled", "a touch kind")
     assert_eq(f"${EventKind.DidEnterBackground}", "did enter background", "a lifecycle kind")
+    assert_eq(f"${TextInputType.PasswordHidden}", "a hidden password", "an input type")
+    assert_eq(f"${Capitalization.Sentences}", "sentences", "a capitalization")
+    assert_eq(f"${SystemTheme.Dark}", "dark", "a theme")
     assert_eq(f"${PixelFormat.Argb8888}", "argb8888", "a pixel format")
     assert_eq(f"${BlendMode.Blend}", "blend", "a blend mode")
     assert_eq(f"${MouseButton.Right}", "right", "a mouse button")
@@ -538,6 +584,20 @@ every_variant_reads_its_own_fields()
     // is the low half of the 64-bit touch id — so it answers 7 here, the touch device, and not the
     // window 3 that the event actually carries.
     assert_eq(te.window_id(), 7u32, "window_id reads the touch id's low half, which is why it is wrong")
+
+    // **The composition view is the text view with two words on the end**, so the risk is not the
+    // shared prefix but whether `start` and `length` land past the pointer rather than inside the
+    // padding beside it. A null `text` is deliberate: it is the documented empty answer, and it keeps
+    // this from needing storage to outlive the assertion.
+    var ed = c.TextEditingEvent(c.EVENT_TEXT_EDITING, 0, 0, 3, 0, null, 2, 5, [0; 88])
+    val ep: *c.Event = ptr_cast(&ed)
+    val ee = Event(ep[0])
+
+    assert_eq(ee.kind(), EventKind.TextEditing, "a composition in progress")
+    assert_eq(ee.window_id(), 3u32, "which keeps its window where the others do")
+    assert_eq(ee.text(), "", "a null composition reads as empty rather than trapping")
+    assert_eq(ee.composition_start(), 2i32, "the selected range starts past the pointer")
+    assert_eq(ee.composition_length(), 5i32, "and its length follows it")
 
     var d = c.DropEvent(c.EVENT_DROP_FILE, 0, 0, 3, 8.0, 9.0, 0, null, null, [0; 80])
     val dp: *c.Event = ptr_cast(&d)
@@ -1139,6 +1199,110 @@ a_window_reports_a_usable_scale()
     // the wrapper would pass just as well if SDL had answered 1.0 by itself.
     assert_eq(c.get_display_content_scale(9999), 0.0f32, "SDL says zero for a display it has not got")
     assert_eq(display_content_scale(9999), 1.0f32, "and this binding says one")
+
+    quit()
+
+// ## Text input
+
+// **What can be checked without a keyboard is that SDL agrees the field is being edited**, which is
+// the state a text widget would otherwise have to keep beside SDL's and keep synchronised. The dummy
+// driver has no input method, so nothing here types anything.
+@test
+text_input_turns_on_and_off()
+    assert(headless(), "SDL_Init")
+
+    val window = create_window("text input", 320, 240, 0).expect("a window")
+
+    assert(!window.text_input_active(), "a fresh window is not taking text")
+    assert(window.start_text_input(), "SDL_StartTextInput")
+    assert(window.text_input_active(), "and now it is")
+    assert(window.stop_text_input(), "SDL_StopTextInput")
+    assert(!window.text_input_active(), "and now it is not again")
+
+    // Every input type is accepted, which is the claim that matters: a value this binding got wrong
+    // would be refused by SDL rather than silently offering the wrong keyboard.
+    assert(window.start_text_input_with(TextInputType.Email), "an e-mail field")
+    assert(window.start_text_input_with(TextInputType.PinHidden), "a hidden pin field")
+    assert(window.start_text_input_with(TextInputType.Number, Some(Capitalization.Off), Some(false),
+        Some(false)), "a number field with every property set")
+    assert(window.text_input_active(), "and it is still taking text")
+
+    assert(window.clear_composition(), "SDL_ClearComposition")
+    assert(window.stop_text_input(), "stopped")
+
+    quit()
+
+// **The area is what keeps a field above the on-screen keyboard**, so what is worth pinning is that
+// the rectangle and the cursor offset survive the round trip through SDL rather than being dropped
+// or transposed — four numbers and a fifth that is not part of the rectangle is exactly the shape an
+// argument goes missing in.
+@test
+the_text_input_area_round_trips()
+    assert(headless(), "SDL_Init")
+
+    val window = create_window("area", 320, 240, 0).expect("a window")
+
+    assert(window.start_text_input(), "text input is on")
+    assert(window.set_text_input_area(rect(10, 20, 200, 30), 45), "SDL_SetTextInputArea")
+
+    val (r, cursor) = window.text_input_area().expect("the area came back")
+
+    assert_eq(r.x, 10, "the x")
+    assert_eq(r.y, 20, "the y")
+    assert_eq(r.w, 200, "the width")
+    assert_eq(r.h, 30, "the height")
+    assert_eq(cursor, 45i32, "and the caret offset, which is not one of the four")
+
+    assert(window.clear_text_input_area(), "and it can be cleared")
+
+    quit()
+
+// The two questions a layout asks about the on-screen keyboard. Both are answerable on any driver —
+// a desktop says there is no keyboard and none is shown, which is the case a program written against
+// them unconditionally relies on.
+@test
+the_screen_keyboard_answers_on_a_desktop()
+    assert(headless(), "SDL_Init")
+
+    val window = create_window("keyboard", 320, 240, 0).expect("a window")
+
+    // Not asserted true or false: whether the platform has one is the platform's business, and this
+    // suite runs on machines that answer differently. What is asserted is that asking is safe and
+    // that a machine with no support never claims one is up.
+    if !has_screen_keyboard_support()
+        assert(!window.screen_keyboard_shown(), "no support means none is ever shown")
+
+    quit()
+
+// ## The system theme
+
+// **The dummy driver reports `Unknown`, so be clear about what this does and does not prove.** It
+// cannot check that a dark machine reports dark — nothing headless can. What it does catch is an `of`
+// that fell through, or a return width read wrongly, either of which lands on `Other` rather than on
+// one of the three names.
+@test
+the_system_theme_is_one_sdl_names()
+    assert(headless(), "SDL_Init")
+
+    val theme = system_theme()
+
+    assert(theme == SystemTheme.Unknown || theme == SystemTheme.Light || theme == SystemTheme.Dark,
+        "the theme is named rather than an unrecognized number")
+
+    quit()
+
+// ## Opening a URL
+
+// **The failure path is the only one a test may take**, since the success path launches a browser.
+// An empty string is refused by the platform before anything opens — checked against SDL directly
+// first rather than guessed, because a test that turned out to open a window would be found by
+// whoever ran the suite next.
+@test
+an_empty_url_is_refused()
+    assert(headless(), "SDL_Init")
+
+    assert(!open_url(""), "an empty URL opens nothing and says so")
+    assert(error() != "", "and the platform left a reason behind")
 
     quit()
 
