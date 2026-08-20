@@ -573,6 +573,7 @@ extern "SDL_SetWindowSize" set_window_size(window: *Window, w: i32, h: i32) -> b
 extern "SDL_GetWindowSize" get_window_size(window: *Window, w: *i32, h: *i32) -> bool
 extern "SDL_GetWindowSizeInPixels" get_window_size_in_pixels(window: *Window, w: *i32, h: *i32) -> bool
 extern "SDL_GetWindowPixelFormat" get_window_pixel_format(window: *Window) -> u32
+extern "SDL_GetWindowSafeArea" get_window_safe_area(window: *Window, rect: *Rect) -> bool
 extern "SDL_GetWindowFlags" get_window_flags(window: *Window) -> u64
 extern "SDL_SetWindowTitle" set_window_title(window: *Window, title: *u8) -> bool
 extern "SDL_SetWindowFullscreen" set_window_fullscreen(window: *Window, fullscreen: bool) -> bool

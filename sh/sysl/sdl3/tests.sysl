@@ -930,3 +930,33 @@ a_dialog_that_cannot_take_a_slot_says_so()
 
     reset_hint(HINT_FILE_DIALOG_DRIVER)
     quit()
+
+// ## The safe area
+
+// **The dummy driver has no system bars, so this pins the shape of the answer rather than a phone's
+// insets.** What can be checked anywhere is that the rectangle is inside the window and not empty —
+// which is the contract a caller lays out against, and is what a binding that passed the wrong
+// pointer or read the struct at the wrong offset would break.
+//
+// On a desktop and under the dummy driver the safe area *is* the whole window, and that is worth
+// asserting rather than skipping: it is the property that lets a program be written against
+// `safe_area` unconditionally and still be right where there is nothing to avoid.
+@test
+a_window_reports_a_safe_area_inside_itself()
+    assert(headless(), "SDL_Init")
+
+    val window = create_window("safe area", 320, 240, 0).expect("a window")
+    val (w, h) = window.size()
+    val safe = window.safe_area()
+
+    assert(safe.w > 0 && safe.h > 0, "the safe area is not empty")
+    assert(safe.x >= 0 && safe.y >= 0, "it starts inside the window")
+    assert(safe.x + safe.w <= w, "and does not run off the right edge")
+    assert(safe.y + safe.h <= h, "or off the bottom")
+
+    // Nothing here has bars to avoid, so it is the whole window — the case a program written against
+    // the safe area everywhere relies on.
+    assert_eq(safe.x, 0, "no insets on this driver, so it starts at the origin")
+    assert_eq(safe.y, 0, "in both axes")
+    assert_eq(safe.w, w, "and it is the whole window wide")
+    assert_eq(safe.h, h, "and the whole window tall")

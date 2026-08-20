@@ -207,6 +207,34 @@ system time, which is what makes it right for a frame time and useless for a dat
 is the companion for pacing — it spins out the last of the interval rather than handing the whole of
 it to the scheduler, and costs a core while it waits.
 
+## The safe area, which is the whole window until it is not
+
+`window.safe_area()` answers the part of the window it is safe to put something the user has to see
+or touch. On a desktop that is the whole window and asking is a formality; on a phone it is the
+point.
+
+**A modern Android app draws edge to edge whether it asks to or not.** From API 35 that is the
+default and there is no opting out by targeting lower, so the surface runs under the status bar at
+the top, under the gesture bar at the bottom, and under a camera cutout where there is one. Lay out
+against `size()` and the buttons are drawn correctly, in the right colours, underneath the system's
+own — and cannot be tapped. iOS has had the same shape since the notch.
+
+```sysl
+val safe = window.safe_area()
+
+renderer.fill_rect(f32(safe.x), f32(safe.y), f32(safe.w), f32(safe.h))
+```
+
+**It is the alternative to going fullscreen, not a supplement to it.** `window.set_fullscreen(true)`
+hides the bars and hands the program the glass, which is what a game wants. A program that keeps them
+wants this instead. Fullscreen makes the safe area the whole window, so code written against it stays
+correct either way — which is the argument for writing against it by default rather than only on the
+platforms that need it.
+
+Where SDL cannot answer, this returns the whole window rather than reporting a failure. That is the
+one place it differs from the C, and it is deliberate: it is the only thing a caller could usefully
+do with `false`, and it is what SDL itself answers on a platform with no insets.
+
 ## Reading the frame back
 
 `renderer.read_pixels()` answers what is in the target as a `&Surface`, which is what a screenshot,

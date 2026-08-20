@@ -82,6 +82,36 @@ struct Window
 
     pixel_format(&self) -> PixelFormat = PixelFormat.of(c.get_window_pixel_format(self.handle))
 
+    // The part of the window it is safe to put something the user has to see or touch.
+    //
+    // **On a desktop this is the whole window and asking is a formality. On a phone it is the
+    // point.** A modern Android app draws edge to edge whether it asks to or not — from API 35 that
+    // is the default and there is no opting out — so the surface extends under the status bar at the
+    // top and the gesture bar at the bottom, and under a camera cutout if the device has one. A
+    // program that lays out against `size` puts its buttons under the system's own, and the pixels
+    // are drawn correctly and cannot be tapped. iOS has had the same shape since the notch.
+    //
+    // **This is the alternative to going fullscreen, not a supplement to it.** `set_fullscreen(true)`
+    // hides the bars and gives the program the glass, which is what a game wants; a program that
+    // keeps them wants this instead. Fullscreen makes the safe area the whole window, so code
+    // written against this stays correct either way — which is the argument for writing against it
+    // by default.
+    safe_area(&self) -> Rect
+        var r = Rect(0, 0, 0, 0)
+
+        // A failure leaves the rectangle as it is rather than being reported, which is the one place
+        // this differs from the C. There is nothing a caller could usefully do with `false` except
+        // fall back to the whole window, and that is what SDL itself answers with when it has no
+        // insets to report — so the fallback is the answer, and returning it directly saves every
+        // caller writing the same three lines.
+        if !c.get_window_safe_area(self.handle, &r)
+            val (w, h) = self.size()
+
+            return Rect(0, 0, w, h)
+
+        r
+    end safe_area
+
     // The window's current state, as a mask of `c`'s `WINDOW_*` values. This is what a program asks
     // to find out whether a resize left it maximized, or whether it still has input focus, without
     // keeping its own record from the events.
