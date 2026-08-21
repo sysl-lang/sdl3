@@ -341,15 +341,10 @@ struct Window
     // do it in every field. `multiline` is likewise derived, from `SDL_HINT_RETURN_KEY_HIDES_IME`.
     // Only what is asked for is set.
     //
-    // **The `Option[T].None` spelling is a compiler requirement rather than decoration.** A bare
-    // `None` as a default value is accepted on a free function and refused on a method — `dialog.sysl`
-    // writes `window: Option[&Window] = None` and it compiles, while the same default here does not,
-    // for a value type or a reference alike. `Some(x)` as a default on a method is fine, so it is the
-    // nullary variant that fails to take its type argument from the parameter it is declared against.
     start_text_input_with(&self, kind: TextInputType = TextInputType.Text,
-                          capitalize: Option[Capitalization] = Option[Capitalization].None,
-                          autocorrect: Option[bool] = Option[bool].None,
-                          multiline: Option[bool] = Option[bool].None) -> bool
+                          capitalize: Option[Capitalization] = None,
+                          autocorrect: Option[bool] = None,
+                          multiline: Option[bool] = None) -> bool
         val props = create_properties()
 
         set_number_property(props, "SDL.textinput.type", i64(kind.code()))
