@@ -3,11 +3,11 @@
 // This is the block a consumer writes to reach this package:
 //
 //     dependencies {
-//       sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.0" }
+//       sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.1" }
 //     }
 //
 // The coordinate is identity rather than a URL, so it carries no `https://`, and the version is the
-// tag `v0.3.0` on this repository.
+// tag `v0.3.1` on this repository.
 //
 // **SDL3 has to be installed, and so do its headers.** Nothing is vendored here: SDL is a large C
 // project with its own build system and its own platform backends, and a package that carried it
@@ -36,7 +36,13 @@
 
 package {
   name    = "sdl3"
-  version = "0.3.0"
+  version = "0.3.1"
+
+  // **The oldest compiler this builds with, and it is a released one.** `types.sysl` names SDL's
+  // rectangles, points, vertices and audio spec from the pleasant layer with `type Rect = c.Rect` —
+  // a transparent alias over a struct, which arrived in 0.0.67. An older compiler refuses the file
+  // outright, so the floor is here rather than left to a reader to work out from a parse error.
+  sysl = "0.0.67"
 }
 
 // **`posix`, because SDL is a hosted library.** It opens devices, starts threads, talks to a window

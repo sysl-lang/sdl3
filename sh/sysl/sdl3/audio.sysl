@@ -100,7 +100,7 @@ quit_audio() = quit_subsystem(INIT_AUDIO)
 // which is the natural shape for anything synthesised.
 open_audio_stream(freq: i32, channels: i32 = 1,
                   format: AudioFormat = AudioFormat.F32) -> Option[&AudioStream]
-    var spec = c.AudioSpec(format.code(), channels, freq)
+    var spec = AudioSpec(format.code(), channels, freq)
     val s = c.open_audio_device_stream(AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, null, null)
 
     if s == null then return None

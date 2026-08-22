@@ -7,7 +7,7 @@ on-screen keyboard, and the lifecycle events an app is stopped and restarted by.
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.0" }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.1" }
 }
 ```
 
@@ -66,10 +66,32 @@ from which module they sit in. They are an index space rather than a small close
 `KeyboardState` is literally an array indexed by scancode, and SDL has two hundred and forty of
 them — so there is nothing for the upper layer to improve about them beyond carrying them.
 
-`c.Rect`, `c.FRect`, `c.FPoint` and `c.Vertex` are the one thing still reached for by name: they are
-SDL's own layouts, `c`'s own declarations take them, and a module may not depend on one that depends
-on it, so they cannot be re-spelled up here without a transparent type alias, which the compiler does
-not have. `rect`, `frect` and `fpoint` build one without naming the type, which covers most uses.
+**The structs a drawing call takes are named up here too, as transparent aliases.** They could not
+be *moved* the way the constants were: `c`'s own declarations take them — `SDL_RenderFillRect` is
+written against a `*Rect` — and a module may not depend on a module that depends on it. So
+`types.sysl` names them from above instead:
+
+```sysl
+type Rect = c.Rect
+type FRect = c.FRect
+type FPoint = c.FPoint
+type Vertex = c.Vertex
+type AudioSpec = c.AudioSpec
+type DialogFileFilter = c.DialogFileFilter
+```
+
+An alias declares no type. A value built through either name is the same value, crosses to C through
+the same pointer, and satisfies both names everywhere — so this costs nothing at run time and the
+package's tests check it by handing a value built above to a declaration written below. `rect`,
+`frect` and `fpoint` still build one without naming the type at all, which covers most uses.
+
+This is what needs sysl **0.0.67**, the release a transparent alias over a struct arrived in, and
+`package.hocon` states that floor.
+
+**`Surface` is the one name deliberately not aliased.** `sh.sysl.sdl3` already declares an owning
+`Surface` that frees what it points at when the last reference goes; SDL's raw `SDL_Surface` is a
+different thing wearing the same name, and giving it that name here would hide the owning one. The
+only caller that wants the raw type is `sdl3-ttf`, and it still names `sh.sysl.sdl3.c.Surface`.
 
 ## The numbers are asked for, not written down
 
@@ -478,7 +500,7 @@ the answer for anything more.
 sysl test .
 ```
 
-Fifty-five tests, run headless against a real SDL3 — the dummy video and audio drivers create
+Fifty-six tests, run headless against a real SDL3 — the dummy video and audio drivers create
 windows, renderers, textures and devices and draw into memory, so nothing here needs a display or a
 sound card.
 

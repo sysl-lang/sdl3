@@ -1,7 +1,6 @@
 module sh.sysl.sdl3
 
 import sh.sysl.sdl3.c
-import sh.sysl.sdl3.c.Rect
 import sysl.text.{cstring, from_cstring}
 
 // Textures, surfaces, the pixel formats they are in, and the property bag a few calls take their

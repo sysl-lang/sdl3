@@ -1,7 +1,6 @@
 module sh.sysl.sdl3
 
 import sh.sysl.sdl3.c
-import sh.sysl.sdl3.c.{Rect, FRect, FPoint}
 import sysl.text.cstring
 
 // Windows, displays, and the text input that belongs to a window.
@@ -21,9 +20,11 @@ import sysl.text.cstring
 // the reason in `error()`; an `Option` is the same information in the shape the rest of the
 // language already reads, and it means a null handle cannot be passed on by accident.
 //
-// **A rectangle is `c.Rect` or `c.FRect`** — SDL's own layout, since these cross to C by pointer
-// and there is nothing about four numbers for this layer to improve. `rect` and `frect` build one
-// without naming the type; a consumer that wants the name imports it from `c`.
+// **A rectangle is `Rect` or `FRect`** — SDL's own layout, since these cross to C by pointer and
+// there is nothing about four numbers for this layer to improve. Both names are declared in
+// `types.sysl` as transparent aliases for the declarations in `c`, so a consumer names them from
+// this module and never has to import the one below. `rect` and `frect` build one without naming
+// the type at all.
 
 // What a field is for, which is what a phone reads to decide which keyboard to put on the screen. On
 // a desktop it changes nothing — which is why a field that offers a PIN pad on a phone and a full

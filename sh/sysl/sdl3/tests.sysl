@@ -47,6 +47,33 @@ the_layouts_agree_with_c()
     assert_eq(sizeof(c.AudioSpec), 12usize, "SDL_AudioSpec is three 32-bit words")
     assert_eq(sizeof(c.DialogFileFilter), 16usize, "SDL_DialogFileFilter is two pointers")
 
+// A declaration written against the name in `c`, which is what makes the test below a type check
+// rather than a size comparison: it takes a value built through the alias, and it only compiles at
+// all if the two names are one type.
+private width_of(r: *c.Rect) -> i32 = r[0].w
+
+// The six names in `types.sysl` are second spellings and not second types. A size says the layouts
+// match, which two independent declarations of the same four fields would also do; handing one
+// across to a signature written against the other is what says there is only one type here.
+@test
+an_alias_is_the_type_it_names()
+    assert_eq(sizeof(Rect), sizeof(c.Rect), "Rect")
+    assert_eq(sizeof(FRect), sizeof(c.FRect), "FRect")
+    assert_eq(sizeof(FPoint), sizeof(c.FPoint), "FPoint")
+    assert_eq(sizeof(Vertex), sizeof(c.Vertex), "Vertex")
+    assert_eq(sizeof(AudioSpec), sizeof(c.AudioSpec), "AudioSpec")
+    assert_eq(sizeof(DialogFileFilter), sizeof(c.DialogFileFilter), "DialogFileFilter")
+
+    var r = Rect(1, 2, 3, 4)
+
+    assert_eq(width_of(&r), 3, "built above, read through a pointer declared below")
+
+    // And the other way round, which is the direction a drawing call actually goes: `frect` builds
+    // through `c`'s declaration and the result satisfies the name this module publishes.
+    val f: FRect = frect(0.0, 0.0, 8.0, 4.0)
+
+    assert_eq(f.w, 8.0f32, "and the alias names what `frect` already returned")
+
 // Every variant view is the union's own size, which is what makes reinterpreting one into another
 // safe — a view that came out short would be reading a field past the end of the storage SDL
 // filled.
@@ -840,7 +867,7 @@ a_cursor_is_lent_by_sdl_and_never_freed_here()
 @test
 a_circle_is_a_fan()
     val segs = circle_segments(20.0)
-    var verts: Buf[c.Vertex] = buf()
+    var verts: Buf[Vertex] = buf()
     var idx: Buf[i32] = buf()
 
     build_circle(&verts, &idx, 100.0, 50.0, 20.0, rgb(255, 0, 0), segs)
@@ -864,7 +891,7 @@ the_segment_count_is_bounded()
 
 @test
 a_thick_line_is_a_quad()
-    var verts: Buf[c.Vertex] = buf()
+    var verts: Buf[Vertex] = buf()
     var idx: Buf[i32] = buf()
 
     assert(build_thick_line(&verts, &idx, 0.0, 0.0, 10.0, 0.0, 4.0, rgb(0, 0, 255)), "it built")
@@ -879,7 +906,7 @@ a_thick_line_is_a_quad()
 
 @test
 a_zero_length_thick_line_draws_nothing()
-    var verts: Buf[c.Vertex] = buf()
+    var verts: Buf[Vertex] = buf()
     var idx: Buf[i32] = buf()
 
     assert(!build_thick_line(&verts, &idx, 5.0, 5.0, 5.0, 5.0, 4.0, WHITE), "a point has no normal")

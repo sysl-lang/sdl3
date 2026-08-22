@@ -1,0 +1,41 @@
+// SDL's own structs, named from the layer an application imports.
+//
+// **A transparent alias is a second spelling, not a second type.** `type Rect = c.Rect` declares
+// nothing of its own: a value built here is the value `c` builds, crosses to C through the same
+// pointer, and satisfies both names everywhere one of them is written. This file therefore costs
+// nothing at run time and exists so that a program drawing a rectangle can name one.
+//
+// **Why an alias rather than a move.** `constants.sysl` moved SDL's three hundred numbers up here
+// outright, because nothing in `c` ever read one. These are the opposite case: `c`'s own
+// declarations take them — `SDL_RenderFillRect` is written against a `*Rect` — and a module may not
+// depend on a module that depends on it. So the declaration stays below and is named from above,
+// which is the shape the two-layer split needs and could not express until 0.0.67.
+//
+// **`Surface` is deliberately not here.** This module already declares an owning `Surface` in
+// `texture.sysl` that frees what it points at when the last reference goes; SDL's raw one is a
+// different thing wearing the same name, and giving it that name here would hide the owning one.
+// `sdl3-ttf` is the only caller that needs the raw type and it still reaches `c` for it.
+
+module sh.sysl.sdl3
+
+import sh.sysl.sdl3.c
+
+// `SDL_Rect` — integer screen coordinates. `rect` builds one without naming the type.
+type Rect = c.Rect
+
+// `SDL_FRect` — the floating-point coordinates the renderer works in, which is every drawing call.
+// `frect` builds one without naming the type.
+type FRect = c.FRect
+
+// `SDL_FPoint` — a point in those same coordinates.
+type FPoint = c.FPoint
+
+// `SDL_Vertex` — position, colour in 0..1 and texture coordinates, eight contiguous floats, which is
+// what `Renderer.geometry` hands to `SDL_RenderGeometry`.
+type Vertex = c.Vertex
+
+// `SDL_AudioSpec` — sample format, channel count and rate.
+type AudioSpec = c.AudioSpec
+
+// `SDL_DialogFileFilter` — a description and a pattern, for the file dialogs in `dialog.sysl`.
+type DialogFileFilter = c.DialogFileFilter

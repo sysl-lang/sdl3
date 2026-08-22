@@ -1,7 +1,6 @@
 module sh.sysl.sdl3
 
 import sh.sysl.sdl3.c
-import sh.sysl.sdl3.c.{Rect, FRect, FPoint, Vertex}
 import sysl.math.{Float, pi}
 import sysl.slices.as_ptr
 import sysl.buf.{Buf, buf}

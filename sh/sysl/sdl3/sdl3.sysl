@@ -27,6 +27,12 @@ import sysl.text.{cstring, from_cstring}
 //     init(INIT_VIDEO)
 //     create_window("hello", 640, 480, WINDOW_RESIZABLE)
 //
+// **The structs a drawing call takes are named here too, as transparent aliases.** `Rect`, `FRect`,
+// `FPoint`, `Vertex`, `AudioSpec` and `DialogFileFilter` are declared in `types.sysl` for the
+// declarations `c` carries. They could not be moved the way the constants were — `c`'s own
+// signatures take them, and a module may not depend on one that depends on it — so they are named
+// from above instead, which is a second spelling rather than a second type and costs nothing.
+//
 // **`SDL_Surface` is public and ABI-stable in SDL3**, so its fields are read straight out of SDL's
 // storage rather than copied out by a shim. That is a change from SDL2, where it was opaque, and it
 // is half of why this package needs no C of its own.
