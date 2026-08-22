@@ -28,7 +28,7 @@ import sysl.buf.{Buf, buf}
 // Bring SDL up headless. Every test that needs a window or a renderer starts here.
 headless() -> bool
     set_hint(HINT_VIDEO_DRIVER, "dummy")
-    init(c.INIT_VIDEO)
+    init(INIT_VIDEO)
 end headless
 
 // ## Layout
@@ -103,40 +103,40 @@ the_clock_advances_and_its_scales_agree()
 // ## The enumerations, walked both ways
 //
 // This is the check `c const` cannot make. Every arm names a constant clang resolved, so a typo is
-// already impossible — what is still possible is `Add -> c.BLENDMODE_MOD`, which is why each
+// already impossible — what is still possible is `Add -> BLENDMODE_MOD`, which is why each
 // mapping is stated a second time here in the only other form available: as a table of pairs.
 
 @test
 the_event_kinds_are_sdls_own_numbers()
-    assert_eq(EventKind.Quit.code(), c.EVENT_QUIT, "quit")
-    assert_eq(EventKind.WindowShown.code(), c.EVENT_WINDOW_SHOWN, "shown")
-    assert_eq(EventKind.WindowHidden.code(), c.EVENT_WINDOW_HIDDEN, "hidden")
-    assert_eq(EventKind.WindowExposed.code(), c.EVENT_WINDOW_EXPOSED, "exposed")
-    assert_eq(EventKind.WindowMoved.code(), c.EVENT_WINDOW_MOVED, "moved")
-    assert_eq(EventKind.WindowResized.code(), c.EVENT_WINDOW_RESIZED, "resized")
-    assert_eq(EventKind.WindowPixelSizeChanged.code(), c.EVENT_WINDOW_PIXEL_SIZE_CHANGED, "pixels")
-    assert_eq(EventKind.WindowMinimized.code(), c.EVENT_WINDOW_MINIMIZED, "minimized")
-    assert_eq(EventKind.WindowMaximized.code(), c.EVENT_WINDOW_MAXIMIZED, "maximized")
-    assert_eq(EventKind.WindowRestored.code(), c.EVENT_WINDOW_RESTORED, "restored")
-    assert_eq(EventKind.WindowMouseEnter.code(), c.EVENT_WINDOW_MOUSE_ENTER, "mouse in")
-    assert_eq(EventKind.WindowMouseLeave.code(), c.EVENT_WINDOW_MOUSE_LEAVE, "mouse out")
-    assert_eq(EventKind.WindowFocusGained.code(), c.EVENT_WINDOW_FOCUS_GAINED, "focus in")
-    assert_eq(EventKind.WindowFocusLost.code(), c.EVENT_WINDOW_FOCUS_LOST, "focus out")
-    assert_eq(EventKind.WindowCloseRequested.code(), c.EVENT_WINDOW_CLOSE_REQUESTED, "close")
-    assert_eq(EventKind.KeyDown.code(), c.EVENT_KEY_DOWN, "key down")
-    assert_eq(EventKind.KeyUp.code(), c.EVENT_KEY_UP, "key up")
-    assert_eq(EventKind.TextInput.code(), c.EVENT_TEXT_INPUT, "text input")
-    assert_eq(EventKind.TextEditing.code(), c.EVENT_TEXT_EDITING, "text editing")
-    assert_eq(EventKind.MouseMotion.code(), c.EVENT_MOUSE_MOTION, "motion")
-    assert_eq(EventKind.MouseButtonDown.code(), c.EVENT_MOUSE_BUTTON_DOWN, "button down")
-    assert_eq(EventKind.MouseButtonUp.code(), c.EVENT_MOUSE_BUTTON_UP, "button up")
-    assert_eq(EventKind.MouseWheel.code(), c.EVENT_MOUSE_WHEEL, "wheel")
-    assert_eq(EventKind.DropFile.code(), c.EVENT_DROP_FILE, "drop file")
-    assert_eq(EventKind.DropText.code(), c.EVENT_DROP_TEXT, "drop text")
-    assert_eq(EventKind.DropBegin.code(), c.EVENT_DROP_BEGIN, "drop begin")
-    assert_eq(EventKind.DropComplete.code(), c.EVENT_DROP_COMPLETE, "drop complete")
-    assert_eq(EventKind.DropPosition.code(), c.EVENT_DROP_POSITION, "drop position")
-    assert_eq(EventKind.User.code(), c.EVENT_USER, "user")
+    assert_eq(EventKind.Quit.code(), EVENT_QUIT, "quit")
+    assert_eq(EventKind.WindowShown.code(), EVENT_WINDOW_SHOWN, "shown")
+    assert_eq(EventKind.WindowHidden.code(), EVENT_WINDOW_HIDDEN, "hidden")
+    assert_eq(EventKind.WindowExposed.code(), EVENT_WINDOW_EXPOSED, "exposed")
+    assert_eq(EventKind.WindowMoved.code(), EVENT_WINDOW_MOVED, "moved")
+    assert_eq(EventKind.WindowResized.code(), EVENT_WINDOW_RESIZED, "resized")
+    assert_eq(EventKind.WindowPixelSizeChanged.code(), EVENT_WINDOW_PIXEL_SIZE_CHANGED, "pixels")
+    assert_eq(EventKind.WindowMinimized.code(), EVENT_WINDOW_MINIMIZED, "minimized")
+    assert_eq(EventKind.WindowMaximized.code(), EVENT_WINDOW_MAXIMIZED, "maximized")
+    assert_eq(EventKind.WindowRestored.code(), EVENT_WINDOW_RESTORED, "restored")
+    assert_eq(EventKind.WindowMouseEnter.code(), EVENT_WINDOW_MOUSE_ENTER, "mouse in")
+    assert_eq(EventKind.WindowMouseLeave.code(), EVENT_WINDOW_MOUSE_LEAVE, "mouse out")
+    assert_eq(EventKind.WindowFocusGained.code(), EVENT_WINDOW_FOCUS_GAINED, "focus in")
+    assert_eq(EventKind.WindowFocusLost.code(), EVENT_WINDOW_FOCUS_LOST, "focus out")
+    assert_eq(EventKind.WindowCloseRequested.code(), EVENT_WINDOW_CLOSE_REQUESTED, "close")
+    assert_eq(EventKind.KeyDown.code(), EVENT_KEY_DOWN, "key down")
+    assert_eq(EventKind.KeyUp.code(), EVENT_KEY_UP, "key up")
+    assert_eq(EventKind.TextInput.code(), EVENT_TEXT_INPUT, "text input")
+    assert_eq(EventKind.TextEditing.code(), EVENT_TEXT_EDITING, "text editing")
+    assert_eq(EventKind.MouseMotion.code(), EVENT_MOUSE_MOTION, "motion")
+    assert_eq(EventKind.MouseButtonDown.code(), EVENT_MOUSE_BUTTON_DOWN, "button down")
+    assert_eq(EventKind.MouseButtonUp.code(), EVENT_MOUSE_BUTTON_UP, "button up")
+    assert_eq(EventKind.MouseWheel.code(), EVENT_MOUSE_WHEEL, "wheel")
+    assert_eq(EventKind.DropFile.code(), EVENT_DROP_FILE, "drop file")
+    assert_eq(EventKind.DropText.code(), EVENT_DROP_TEXT, "drop text")
+    assert_eq(EventKind.DropBegin.code(), EVENT_DROP_BEGIN, "drop begin")
+    assert_eq(EventKind.DropComplete.code(), EVENT_DROP_COMPLETE, "drop complete")
+    assert_eq(EventKind.DropPosition.code(), EVENT_DROP_POSITION, "drop position")
+    assert_eq(EventKind.User.code(), EVENT_USER, "user")
 
     // **`TextEditing` is the one this test was written for.** It had been transcribed as `0x304`,
     // which is `SDL_EVENT_KEYMAP_CHANGED`, so an input method's composition events never matched
@@ -146,50 +146,50 @@ the_event_kinds_are_sdls_own_numbers()
 // And back, which is the direction every `poll_event` takes.
 @test
 an_event_kind_comes_back_as_itself()
-    assert_eq(EventKind.of(c.EVENT_QUIT), EventKind.Quit, "quit")
-    assert_eq(EventKind.of(c.EVENT_KEY_DOWN), EventKind.KeyDown, "key down")
-    assert_eq(EventKind.of(c.EVENT_TEXT_INPUT), EventKind.TextInput, "text input")
-    assert_eq(EventKind.of(c.EVENT_TEXT_EDITING), EventKind.TextEditing, "text editing")
-    assert_eq(EventKind.of(c.EVENT_MOUSE_WHEEL), EventKind.MouseWheel, "wheel")
-    assert_eq(EventKind.of(c.EVENT_DROP_POSITION), EventKind.DropPosition, "drop position")
-    assert_eq(EventKind.of(c.EVENT_WINDOW_PIXEL_SIZE_CHANGED), EventKind.WindowPixelSizeChanged,
+    assert_eq(EventKind.of(EVENT_QUIT), EventKind.Quit, "quit")
+    assert_eq(EventKind.of(EVENT_KEY_DOWN), EventKind.KeyDown, "key down")
+    assert_eq(EventKind.of(EVENT_TEXT_INPUT), EventKind.TextInput, "text input")
+    assert_eq(EventKind.of(EVENT_TEXT_EDITING), EventKind.TextEditing, "text editing")
+    assert_eq(EventKind.of(EVENT_MOUSE_WHEEL), EventKind.MouseWheel, "wheel")
+    assert_eq(EventKind.of(EVENT_DROP_POSITION), EventKind.DropPosition, "drop position")
+    assert_eq(EventKind.of(EVENT_WINDOW_PIXEL_SIZE_CHANGED), EventKind.WindowPixelSizeChanged,
         "the pixel size change, which is not the resize beside it")
-    assert_eq(EventKind.of(c.EVENT_USER), EventKind.User, "user")
+    assert_eq(EventKind.of(EVENT_USER), EventKind.User, "user")
 
     // The four touch kinds are one contiguous run in SDL's enumeration, which is exactly the shape a
     // table slips by one in.
-    assert_eq(EventKind.of(c.EVENT_FINGER_DOWN), EventKind.FingerDown, "finger down")
-    assert_eq(EventKind.of(c.EVENT_FINGER_UP), EventKind.FingerUp, "finger up")
-    assert_eq(EventKind.of(c.EVENT_FINGER_MOTION), EventKind.FingerMotion, "finger motion")
-    assert_eq(EventKind.of(c.EVENT_FINGER_CANCELED), EventKind.FingerCanceled, "finger canceled")
+    assert_eq(EventKind.of(EVENT_FINGER_DOWN), EventKind.FingerDown, "finger down")
+    assert_eq(EventKind.of(EVENT_FINGER_UP), EventKind.FingerUp, "finger up")
+    assert_eq(EventKind.of(EVENT_FINGER_MOTION), EventKind.FingerMotion, "finger motion")
+    assert_eq(EventKind.of(EVENT_FINGER_CANCELED), EventKind.FingerCanceled, "finger canceled")
 
     // And so are the six lifecycle events, where the two halves of each pair differ by one word.
-    assert_eq(EventKind.of(c.EVENT_TERMINATING), EventKind.Terminating, "terminating")
-    assert_eq(EventKind.of(c.EVENT_LOW_MEMORY), EventKind.LowMemory, "low memory")
-    assert_eq(EventKind.of(c.EVENT_WILL_ENTER_BACKGROUND), EventKind.WillEnterBackground,
+    assert_eq(EventKind.of(EVENT_TERMINATING), EventKind.Terminating, "terminating")
+    assert_eq(EventKind.of(EVENT_LOW_MEMORY), EventKind.LowMemory, "low memory")
+    assert_eq(EventKind.of(EVENT_WILL_ENTER_BACKGROUND), EventKind.WillEnterBackground,
         "will enter background")
-    assert_eq(EventKind.of(c.EVENT_DID_ENTER_BACKGROUND), EventKind.DidEnterBackground,
+    assert_eq(EventKind.of(EVENT_DID_ENTER_BACKGROUND), EventKind.DidEnterBackground,
         "did enter background, which is the one after it")
-    assert_eq(EventKind.of(c.EVENT_WILL_ENTER_FOREGROUND), EventKind.WillEnterForeground,
+    assert_eq(EventKind.of(EVENT_WILL_ENTER_FOREGROUND), EventKind.WillEnterForeground,
         "will enter foreground")
-    assert_eq(EventKind.of(c.EVENT_DID_ENTER_FOREGROUND), EventKind.DidEnterForeground,
+    assert_eq(EventKind.of(EVENT_DID_ENTER_FOREGROUND), EventKind.DidEnterForeground,
         "did enter foreground")
 
-    assert_eq(EventKind.of(c.EVENT_WINDOW_DISPLAY_SCALE_CHANGED), EventKind.WindowDisplayScaleChanged,
+    assert_eq(EventKind.of(EVENT_WINDOW_DISPLAY_SCALE_CHANGED), EventKind.WindowDisplayScaleChanged,
         "the scale change, which is not the display change beside it")
-    assert_eq(EventKind.of(c.EVENT_WINDOW_DISPLAY_CHANGED), EventKind.WindowDisplayChanged,
+    assert_eq(EventKind.of(EVENT_WINDOW_DISPLAY_CHANGED), EventKind.WindowDisplayChanged,
         "and the display change")
 
     // Every one of them carries its number back out, which is the direction `flush_events` uses.
-    assert_eq(EventKind.FingerCanceled.code(), c.EVENT_FINGER_CANCELED, "and back")
-    assert_eq(EventKind.DidEnterBackground.code(), c.EVENT_DID_ENTER_BACKGROUND, "and back")
-    assert_eq(EventKind.WindowDisplayScaleChanged.code(), c.EVENT_WINDOW_DISPLAY_SCALE_CHANGED,
+    assert_eq(EventKind.FingerCanceled.code(), EVENT_FINGER_CANCELED, "and back")
+    assert_eq(EventKind.DidEnterBackground.code(), EVENT_DID_ENTER_BACKGROUND, "and back")
+    assert_eq(EventKind.WindowDisplayScaleChanged.code(), EVENT_WINDOW_DISPLAY_SCALE_CHANGED,
         "and back")
 
-    assert_eq(EventKind.of(c.EVENT_LOCALE_CHANGED), EventKind.LocaleChanged, "locale changed")
-    assert_eq(EventKind.of(c.EVENT_SYSTEM_THEME_CHANGED), EventKind.SystemThemeChanged,
+    assert_eq(EventKind.of(EVENT_LOCALE_CHANGED), EventKind.LocaleChanged, "locale changed")
+    assert_eq(EventKind.of(EVENT_SYSTEM_THEME_CHANGED), EventKind.SystemThemeChanged,
         "system theme changed")
-    assert_eq(EventKind.SystemThemeChanged.code(), c.EVENT_SYSTEM_THEME_CHANGED, "and back")
+    assert_eq(EventKind.SystemThemeChanged.code(), EVENT_SYSTEM_THEME_CHANGED, "and back")
 
     // A gamepad axis, which this package does not name. It is an ordinary answer.
     assert_eq(EventKind.of(0x650u32), EventKind.Other(0x650), "an event with no variant here")
@@ -197,69 +197,69 @@ an_event_kind_comes_back_as_itself()
 
 @test
 the_mouse_buttons_are_sdls_own_numbers()
-    assert_eq(MouseButton.Left.code(), c.BUTTON_LEFT, "left")
-    assert_eq(MouseButton.Middle.code(), c.BUTTON_MIDDLE, "middle")
-    assert_eq(MouseButton.Right.code(), c.BUTTON_RIGHT, "right")
-    assert_eq(MouseButton.X1.code(), c.BUTTON_X1, "x1")
-    assert_eq(MouseButton.X2.code(), c.BUTTON_X2, "x2")
+    assert_eq(MouseButton.Left.code(), BUTTON_LEFT, "left")
+    assert_eq(MouseButton.Middle.code(), BUTTON_MIDDLE, "middle")
+    assert_eq(MouseButton.Right.code(), BUTTON_RIGHT, "right")
+    assert_eq(MouseButton.X1.code(), BUTTON_X1, "x1")
+    assert_eq(MouseButton.X2.code(), BUTTON_X2, "x2")
 
-    assert_eq(MouseButton.of(c.BUTTON_LEFT), MouseButton.Left, "and back")
-    assert_eq(MouseButton.of(c.BUTTON_X2), MouseButton.X2, "and back")
+    assert_eq(MouseButton.of(BUTTON_LEFT), MouseButton.Left, "and back")
+    assert_eq(MouseButton.of(BUTTON_X2), MouseButton.X2, "and back")
     assert_eq(MouseButton.of(9), MouseButton.Other(9), "a button with no name")
 
 @test
 the_blend_modes_are_sdls_own_numbers()
-    assert_eq(BlendMode.Off.code(), c.BLENDMODE_NONE, "none")
-    assert_eq(BlendMode.Blend.code(), c.BLENDMODE_BLEND, "blend")
-    assert_eq(BlendMode.Add.code(), c.BLENDMODE_ADD, "add")
-    assert_eq(BlendMode.Mod.code(), c.BLENDMODE_MOD, "mod")
-    assert_eq(BlendMode.Mul.code(), c.BLENDMODE_MUL, "mul")
+    assert_eq(BlendMode.Off.code(), BLENDMODE_NONE, "none")
+    assert_eq(BlendMode.Blend.code(), BLENDMODE_BLEND, "blend")
+    assert_eq(BlendMode.Add.code(), BLENDMODE_ADD, "add")
+    assert_eq(BlendMode.Mod.code(), BLENDMODE_MOD, "mod")
+    assert_eq(BlendMode.Mul.code(), BLENDMODE_MUL, "mul")
 
 @test
 the_texture_and_scale_modes_are_sdls_own_numbers()
-    assert_eq(TextureAccess.Static.code(), c.TEXTUREACCESS_STATIC, "static")
-    assert_eq(TextureAccess.Streaming.code(), c.TEXTUREACCESS_STREAMING, "streaming")
-    assert_eq(TextureAccess.Target.code(), c.TEXTUREACCESS_TARGET, "target")
-    assert_eq(TextureAccess.of(c.TEXTUREACCESS_TARGET), TextureAccess.Target, "and back")
+    assert_eq(TextureAccess.Static.code(), TEXTUREACCESS_STATIC, "static")
+    assert_eq(TextureAccess.Streaming.code(), TEXTUREACCESS_STREAMING, "streaming")
+    assert_eq(TextureAccess.Target.code(), TEXTUREACCESS_TARGET, "target")
+    assert_eq(TextureAccess.of(TEXTUREACCESS_TARGET), TextureAccess.Target, "and back")
 
-    assert_eq(ScaleMode.Nearest.code(), c.SCALEMODE_NEAREST, "nearest")
-    assert_eq(ScaleMode.Linear.code(), c.SCALEMODE_LINEAR, "linear")
-    assert_eq(ScaleMode.PixelArt.code(), c.SCALEMODE_PIXELART, "pixelart")
-    assert_eq(ScaleMode.of(c.SCALEMODE_LINEAR), ScaleMode.Linear, "and back")
+    assert_eq(ScaleMode.Nearest.code(), SCALEMODE_NEAREST, "nearest")
+    assert_eq(ScaleMode.Linear.code(), SCALEMODE_LINEAR, "linear")
+    assert_eq(ScaleMode.PixelArt.code(), SCALEMODE_PIXELART, "pixelart")
+    assert_eq(ScaleMode.of(SCALEMODE_LINEAR), ScaleMode.Linear, "and back")
 
 @test
 the_colorspaces_and_dialog_kinds_are_sdls_own_numbers()
-    assert_eq(Colorspace.Bt709Limited.code(), c.COLORSPACE_BT709_LIMITED, "bt709")
-    assert_eq(Colorspace.Bt601Limited.code(), c.COLORSPACE_BT601_LIMITED, "bt601")
-    assert_eq(Colorspace.Jpeg.code(), c.COLORSPACE_JPEG, "jpeg")
+    assert_eq(Colorspace.Bt709Limited.code(), COLORSPACE_BT709_LIMITED, "bt709")
+    assert_eq(Colorspace.Bt601Limited.code(), COLORSPACE_BT601_LIMITED, "bt601")
+    assert_eq(Colorspace.Jpeg.code(), COLORSPACE_JPEG, "jpeg")
 
-    assert_eq(FileDialogKind.OpenFile.code(), c.FILEDIALOG_OPENFILE, "open file")
-    assert_eq(FileDialogKind.SaveFile.code(), c.FILEDIALOG_SAVEFILE, "save file")
-    assert_eq(FileDialogKind.OpenFolder.code(), c.FILEDIALOG_OPENFOLDER, "open folder")
+    assert_eq(FileDialogKind.OpenFile.code(), FILEDIALOG_OPENFILE, "open file")
+    assert_eq(FileDialogKind.SaveFile.code(), FILEDIALOG_SAVEFILE, "save file")
+    assert_eq(FileDialogKind.OpenFolder.code(), FILEDIALOG_OPENFOLDER, "open folder")
 
 // Twenty shapes in one enumeration, in an order that is easy to slip by one.
 @test
 the_system_cursors_are_sdls_own_numbers()
-    assert_eq(SystemCursor.Default.code(), c.SYSTEM_CURSOR_DEFAULT, "default")
-    assert_eq(SystemCursor.Text.code(), c.SYSTEM_CURSOR_TEXT, "text")
-    assert_eq(SystemCursor.Wait.code(), c.SYSTEM_CURSOR_WAIT, "wait")
-    assert_eq(SystemCursor.Crosshair.code(), c.SYSTEM_CURSOR_CROSSHAIR, "crosshair")
-    assert_eq(SystemCursor.Progress.code(), c.SYSTEM_CURSOR_PROGRESS, "progress")
-    assert_eq(SystemCursor.NwseResize.code(), c.SYSTEM_CURSOR_NWSE_RESIZE, "nwse")
-    assert_eq(SystemCursor.NeswResize.code(), c.SYSTEM_CURSOR_NESW_RESIZE, "nesw")
-    assert_eq(SystemCursor.EwResize.code(), c.SYSTEM_CURSOR_EW_RESIZE, "ew")
-    assert_eq(SystemCursor.NsResize.code(), c.SYSTEM_CURSOR_NS_RESIZE, "ns")
-    assert_eq(SystemCursor.Move.code(), c.SYSTEM_CURSOR_MOVE, "move")
-    assert_eq(SystemCursor.NotAllowed.code(), c.SYSTEM_CURSOR_NOT_ALLOWED, "not allowed")
-    assert_eq(SystemCursor.Pointer.code(), c.SYSTEM_CURSOR_POINTER, "pointer")
-    assert_eq(SystemCursor.NwResize.code(), c.SYSTEM_CURSOR_NW_RESIZE, "nw")
-    assert_eq(SystemCursor.NResize.code(), c.SYSTEM_CURSOR_N_RESIZE, "n")
-    assert_eq(SystemCursor.NeResize.code(), c.SYSTEM_CURSOR_NE_RESIZE, "ne")
-    assert_eq(SystemCursor.EResize.code(), c.SYSTEM_CURSOR_E_RESIZE, "e")
-    assert_eq(SystemCursor.SeResize.code(), c.SYSTEM_CURSOR_SE_RESIZE, "se")
-    assert_eq(SystemCursor.SResize.code(), c.SYSTEM_CURSOR_S_RESIZE, "s")
-    assert_eq(SystemCursor.SwResize.code(), c.SYSTEM_CURSOR_SW_RESIZE, "sw")
-    assert_eq(SystemCursor.WResize.code(), c.SYSTEM_CURSOR_W_RESIZE, "w")
+    assert_eq(SystemCursor.Default.code(), SYSTEM_CURSOR_DEFAULT, "default")
+    assert_eq(SystemCursor.Text.code(), SYSTEM_CURSOR_TEXT, "text")
+    assert_eq(SystemCursor.Wait.code(), SYSTEM_CURSOR_WAIT, "wait")
+    assert_eq(SystemCursor.Crosshair.code(), SYSTEM_CURSOR_CROSSHAIR, "crosshair")
+    assert_eq(SystemCursor.Progress.code(), SYSTEM_CURSOR_PROGRESS, "progress")
+    assert_eq(SystemCursor.NwseResize.code(), SYSTEM_CURSOR_NWSE_RESIZE, "nwse")
+    assert_eq(SystemCursor.NeswResize.code(), SYSTEM_CURSOR_NESW_RESIZE, "nesw")
+    assert_eq(SystemCursor.EwResize.code(), SYSTEM_CURSOR_EW_RESIZE, "ew")
+    assert_eq(SystemCursor.NsResize.code(), SYSTEM_CURSOR_NS_RESIZE, "ns")
+    assert_eq(SystemCursor.Move.code(), SYSTEM_CURSOR_MOVE, "move")
+    assert_eq(SystemCursor.NotAllowed.code(), SYSTEM_CURSOR_NOT_ALLOWED, "not allowed")
+    assert_eq(SystemCursor.Pointer.code(), SYSTEM_CURSOR_POINTER, "pointer")
+    assert_eq(SystemCursor.NwResize.code(), SYSTEM_CURSOR_NW_RESIZE, "nw")
+    assert_eq(SystemCursor.NResize.code(), SYSTEM_CURSOR_N_RESIZE, "n")
+    assert_eq(SystemCursor.NeResize.code(), SYSTEM_CURSOR_NE_RESIZE, "ne")
+    assert_eq(SystemCursor.EResize.code(), SYSTEM_CURSOR_E_RESIZE, "e")
+    assert_eq(SystemCursor.SeResize.code(), SYSTEM_CURSOR_SE_RESIZE, "se")
+    assert_eq(SystemCursor.SResize.code(), SYSTEM_CURSOR_S_RESIZE, "s")
+    assert_eq(SystemCursor.SwResize.code(), SYSTEM_CURSOR_SW_RESIZE, "sw")
+    assert_eq(SystemCursor.WResize.code(), SYSTEM_CURSOR_W_RESIZE, "w")
 
 // **Nine values in SDL's own order, and six of them are two pairs and a near-pair.** Text/name,
 // password hidden/visible, PIN hidden/visible: a table that transposed either pair would offer a
@@ -267,36 +267,36 @@ the_system_cursors_are_sdls_own_numbers()
 // cosmetic one and is invisible on the desktop where most of the development happens.
 @test
 the_text_input_types_are_sdls_own_numbers()
-    assert_eq(TextInputType.Text.code(), c.TEXTINPUT_TYPE_TEXT, "text")
-    assert_eq(TextInputType.Name.code(), c.TEXTINPUT_TYPE_TEXT_NAME, "a name")
-    assert_eq(TextInputType.Email.code(), c.TEXTINPUT_TYPE_TEXT_EMAIL, "an e-mail address")
-    assert_eq(TextInputType.Username.code(), c.TEXTINPUT_TYPE_TEXT_USERNAME, "a username")
-    assert_eq(TextInputType.PasswordHidden.code(), c.TEXTINPUT_TYPE_TEXT_PASSWORD_HIDDEN,
+    assert_eq(TextInputType.Text.code(), TEXTINPUT_TYPE_TEXT, "text")
+    assert_eq(TextInputType.Name.code(), TEXTINPUT_TYPE_TEXT_NAME, "a name")
+    assert_eq(TextInputType.Email.code(), TEXTINPUT_TYPE_TEXT_EMAIL, "an e-mail address")
+    assert_eq(TextInputType.Username.code(), TEXTINPUT_TYPE_TEXT_USERNAME, "a username")
+    assert_eq(TextInputType.PasswordHidden.code(), TEXTINPUT_TYPE_TEXT_PASSWORD_HIDDEN,
         "a hidden password")
-    assert_eq(TextInputType.PasswordVisible.code(), c.TEXTINPUT_TYPE_TEXT_PASSWORD_VISIBLE,
+    assert_eq(TextInputType.PasswordVisible.code(), TEXTINPUT_TYPE_TEXT_PASSWORD_VISIBLE,
         "a visible password, which is the one beside it")
-    assert_eq(TextInputType.Number.code(), c.TEXTINPUT_TYPE_NUMBER, "a number")
-    assert_eq(TextInputType.PinHidden.code(), c.TEXTINPUT_TYPE_NUMBER_PASSWORD_HIDDEN, "a hidden pin")
-    assert_eq(TextInputType.PinVisible.code(), c.TEXTINPUT_TYPE_NUMBER_PASSWORD_VISIBLE,
+    assert_eq(TextInputType.Number.code(), TEXTINPUT_TYPE_NUMBER, "a number")
+    assert_eq(TextInputType.PinHidden.code(), TEXTINPUT_TYPE_NUMBER_PASSWORD_HIDDEN, "a hidden pin")
+    assert_eq(TextInputType.PinVisible.code(), TEXTINPUT_TYPE_NUMBER_PASSWORD_VISIBLE,
         "and a visible pin")
 
-    assert_eq(TextInputType.of(c.TEXTINPUT_TYPE_TEXT_PASSWORD_HIDDEN), TextInputType.PasswordHidden,
+    assert_eq(TextInputType.of(TEXTINPUT_TYPE_TEXT_PASSWORD_HIDDEN), TextInputType.PasswordHidden,
         "and back, for the pair that matters most")
-    assert_eq(TextInputType.of(c.TEXTINPUT_TYPE_NUMBER), TextInputType.Number, "and back")
+    assert_eq(TextInputType.of(TEXTINPUT_TYPE_NUMBER), TextInputType.Number, "and back")
     assert_eq(TextInputType.of(99), TextInputType.Other(99), "an input type with no name")
 
 @test
 the_capitalizations_and_themes_are_sdls_own_numbers()
-    assert_eq(Capitalization.Off.code(), c.CAPITALIZE_NONE, "none")
-    assert_eq(Capitalization.Sentences.code(), c.CAPITALIZE_SENTENCES, "sentences")
-    assert_eq(Capitalization.Words.code(), c.CAPITALIZE_WORDS, "words")
-    assert_eq(Capitalization.Letters.code(), c.CAPITALIZE_LETTERS, "letters")
-    assert_eq(Capitalization.of(c.CAPITALIZE_WORDS), Capitalization.Words, "and back")
+    assert_eq(Capitalization.Off.code(), CAPITALIZE_NONE, "none")
+    assert_eq(Capitalization.Sentences.code(), CAPITALIZE_SENTENCES, "sentences")
+    assert_eq(Capitalization.Words.code(), CAPITALIZE_WORDS, "words")
+    assert_eq(Capitalization.Letters.code(), CAPITALIZE_LETTERS, "letters")
+    assert_eq(Capitalization.of(CAPITALIZE_WORDS), Capitalization.Words, "and back")
 
-    assert_eq(SystemTheme.Unknown.code(), c.SYSTEM_THEME_UNKNOWN, "unknown")
-    assert_eq(SystemTheme.Light.code(), c.SYSTEM_THEME_LIGHT, "light")
-    assert_eq(SystemTheme.Dark.code(), c.SYSTEM_THEME_DARK, "dark")
-    assert_eq(SystemTheme.of(c.SYSTEM_THEME_DARK), SystemTheme.Dark, "and back")
+    assert_eq(SystemTheme.Unknown.code(), SYSTEM_THEME_UNKNOWN, "unknown")
+    assert_eq(SystemTheme.Light.code(), SYSTEM_THEME_LIGHT, "light")
+    assert_eq(SystemTheme.Dark.code(), SYSTEM_THEME_DARK, "dark")
+    assert_eq(SystemTheme.of(SYSTEM_THEME_DARK), SystemTheme.Dark, "and back")
 
 // An enumeration that printed its number would be no better than the number, so each says a word.
 @test
@@ -353,9 +353,9 @@ the_audio_formats_are_the_ones_sdl_names()
 the_init_flags_name_the_right_subsystems()
     set_hint(HINT_VIDEO_DRIVER, "dummy")
 
-    assert(init(c.INIT_VIDEO), "SDL_Init(INIT_VIDEO)")
-    assert(was_init(c.INIT_VIDEO) != 0, "video came up")
-    assert(was_init(c.INIT_AUDIO) == 0, "and audio did not, which is what makes this a test")
+    assert(init(INIT_VIDEO), "SDL_Init(INIT_VIDEO)")
+    assert(was_init(INIT_VIDEO) != 0, "video came up")
+    assert(was_init(INIT_AUDIO) == 0, "and audio did not, which is what makes this a test")
 
     quit()
 
@@ -370,23 +370,23 @@ the_init_flags_name_the_right_subsystems()
 the_window_flags_are_the_ones_sdl_reports()
     assert(headless(), "SDL_Init")
 
-    val flags = c.WINDOW_RESIZABLE | c.WINDOW_HIDDEN | c.WINDOW_BORDERLESS
+    val flags = WINDOW_RESIZABLE | WINDOW_HIDDEN | WINDOW_BORDERLESS
     val w = create_window("flags", 64, 48, flags).expect("the window opened")
     val got = w.flags()
 
-    assert((got & c.WINDOW_RESIZABLE) != 0, "resizable")
-    assert((got & c.WINDOW_HIDDEN) != 0, "hidden")
-    assert((got & c.WINDOW_BORDERLESS) != 0, "borderless")
-    assert((got & c.WINDOW_FULLSCREEN) == 0, "and not fullscreen, which nothing asked for")
-    assert((got & c.WINDOW_ALWAYS_ON_TOP) == 0, "nor above the others")
-    assert_eq(c.WINDOW_ALWAYS_ON_TOP, 0x10000u64, "which is bit sixteen, not bit fifteen")
+    assert((got & WINDOW_RESIZABLE) != 0, "resizable")
+    assert((got & WINDOW_HIDDEN) != 0, "hidden")
+    assert((got & WINDOW_BORDERLESS) != 0, "borderless")
+    assert((got & WINDOW_FULLSCREEN) == 0, "and not fullscreen, which nothing asked for")
+    assert((got & WINDOW_ALWAYS_ON_TOP) == 0, "nor above the others")
+    assert_eq(WINDOW_ALWAYS_ON_TOP, 0x10000u64, "which is bit sixteen, not bit fifteen")
 
 // A scale mode round trips through SDL's own storage, which is what says the constant reached it.
 @test
 the_scale_modes_round_trip()
     assert(headless(), "SDL_Init")
 
-    val w = create_window("scale", 32, 32, c.WINDOW_HIDDEN).expect("the window opened")
+    val w = create_window("scale", 32, 32, WINDOW_HIDDEN).expect("the window opened")
     val r = w.create_renderer().expect("the renderer opened")
     val made = r.create_texture(PixelFormat.Argb8888, TextureAccess.Streaming, 16, 16)
     val t = made.expect("the texture was made")
@@ -407,7 +407,7 @@ the_scale_modes_round_trip()
 a_colorspace_survives_into_the_texture()
     assert(headless(), "SDL_Init")
 
-    val w = create_window("yuv", 32, 32, c.WINDOW_HIDDEN).expect("the window opened")
+    val w = create_window("yuv", 32, 32, WINDOW_HIDDEN).expect("the window opened")
     val r = w.create_renderer().expect("the renderer opened")
     val made = r.create_yuv_texture(PixelFormat.Iyuv, TextureAccess.Streaming, 16, 16,
         Colorspace.Bt709Limited)
@@ -427,7 +427,7 @@ a_colorspace_survives_into_the_texture()
 a_blend_mode_changes_what_is_painted()
     assert(headless(), "SDL_Init")
 
-    val w = create_window("blend", 32, 32, c.WINDOW_HIDDEN).expect("the window opened")
+    val w = create_window("blend", 32, 32, WINDOW_HIDDEN).expect("the window opened")
     val r = w.create_renderer().expect("the renderer opened")
 
     assert(r.clear_to(rgb(0, 0, 0)), "a black background")
@@ -455,21 +455,21 @@ a_blend_mode_changes_what_is_painted()
 the_scancodes_are_the_keys_they_say()
     assert(headless(), "SDL_Init")
 
-    assert_eq(scancode_name(c.SCANCODE_A), "A", "A")
-    assert_eq(scancode_name(c.SCANCODE_Z), "Z", "Z")
-    assert_eq(scancode_name(c.SCANCODE_1), "1", "1")
-    assert_eq(scancode_name(c.SCANCODE_ESCAPE), "Escape", "Escape")
-    assert_eq(scancode_name(c.SCANCODE_SPACE), "Space", "Space")
-    assert_eq(scancode_name(c.SCANCODE_LEFT), "Left", "Left")
-    assert_eq(scancode_name(c.SCANCODE_F1), "F1", "F1")
-    assert_eq(scancode_name(c.SCANCODE_F12), "F12", "F12")
-    assert_eq(scancode_name(c.SCANCODE_KP_ENTER), "Keypad Enter", "the keypad enter")
-    assert_eq(scancode_name(c.SCANCODE_LSHIFT), "Left Shift", "left shift")
-    assert_eq(scancode_name(c.SCANCODE_RGUI), "Right GUI", "right GUI, the last of them")
+    assert_eq(scancode_name(SCANCODE_A), "A", "A")
+    assert_eq(scancode_name(SCANCODE_Z), "Z", "Z")
+    assert_eq(scancode_name(SCANCODE_1), "1", "1")
+    assert_eq(scancode_name(SCANCODE_ESCAPE), "Escape", "Escape")
+    assert_eq(scancode_name(SCANCODE_SPACE), "Space", "Space")
+    assert_eq(scancode_name(SCANCODE_LEFT), "Left", "Left")
+    assert_eq(scancode_name(SCANCODE_F1), "F1", "F1")
+    assert_eq(scancode_name(SCANCODE_F12), "F12", "F12")
+    assert_eq(scancode_name(SCANCODE_KP_ENTER), "Keypad Enter", "the keypad enter")
+    assert_eq(scancode_name(SCANCODE_LSHIFT), "Left Shift", "left shift")
+    assert_eq(scancode_name(SCANCODE_RGUI), "Right GUI", "right GUI, the last of them")
 
     // SDL's own name for this one is `SDL_SCANCODE_NUMLOCKCLEAR`, which is the single place in the
     // whole table where the readable name here and the header's do not agree.
-    assert_eq(scancode_name(c.SCANCODE_NUMLOCK), "Numlock", "and the num lock")
+    assert_eq(scancode_name(SCANCODE_NUMLOCK), "Numlock", "and the num lock")
 
     quit()
 
@@ -479,17 +479,17 @@ the_scancodes_are_the_keys_they_say()
 the_keycodes_are_the_keys_they_say()
     assert(headless(), "SDL_Init")
 
-    assert_eq(key_name(c.KEY_RETURN), "Return", "Return")
-    assert_eq(key_name(c.KEY_ESCAPE), "Escape", "Escape")
-    assert_eq(key_name(c.KEY_SPACE), "Space", "Space")
-    assert_eq(key_name(c.KEY_LEFT), "Left", "Left")
-    assert_eq(key_name(c.KEY_F1), "F1", "F1")
-    assert_eq(key_name(c.KEY_F12), "F12", "F12")
-    assert_eq(key_name(c.KEY_PAGEDOWN), "PageDown", "PageDown")
+    assert_eq(key_name(KEY_RETURN), "Return", "Return")
+    assert_eq(key_name(KEY_ESCAPE), "Escape", "Escape")
+    assert_eq(key_name(KEY_SPACE), "Space", "Space")
+    assert_eq(key_name(KEY_LEFT), "Left", "Left")
+    assert_eq(key_name(KEY_F1), "F1", "F1")
+    assert_eq(key_name(KEY_F12), "F12", "F12")
+    assert_eq(key_name(KEY_PAGEDOWN), "PageDown", "PageDown")
 
     // And the two halves agree: the layout maps the physical key to the logical one.
-    assert_eq(key_from_scancode(c.SCANCODE_F1), c.KEY_F1, "F1's scancode maps to F1's keycode")
-    assert_eq(key_from_scancode(c.SCANCODE_RETURN), c.KEY_RETURN, "and Return to Return")
+    assert_eq(key_from_scancode(SCANCODE_F1), KEY_F1, "F1's scancode maps to F1's keycode")
+    assert_eq(key_from_scancode(SCANCODE_RETURN), KEY_RETURN, "and Return to Return")
 
     quit()
 
@@ -522,27 +522,27 @@ an_event_round_trips_through_the_queue()
 // nonsense at run time. This is the test that stands in for the header nobody reads.
 @test
 every_variant_reads_its_own_fields()
-    var k = c.KeyboardEvent(c.EVENT_KEY_DOWN, 0, 77, 3, 0, c.SCANCODE_A, c.KEY_RETURN,
-        c.KMOD_LSHIFT, 0, true, true, [0; 90])
+    var k = c.KeyboardEvent(EVENT_KEY_DOWN, 0, 77, 3, 0, SCANCODE_A, KEY_RETURN,
+        KMOD_LSHIFT, 0, true, true, [0; 90])
     val kp: *c.Event = ptr_cast(&k)
     val ke = Event(kp[0])
 
     assert_eq(ke.kind(), EventKind.KeyDown, "the kind is the first word of every event")
     assert_eq(ke.timestamp(), 77u64, "and the timestamp the second")
     assert_eq(ke.window_id(), 3u32, "the window id sits where every windowed variant has it")
-    assert_eq(ke.key_scancode(), c.SCANCODE_A, "the scancode")
-    assert_eq(ke.key_code(), c.KEY_RETURN, "the keycode")
-    assert_eq(ke.key_mod(), c.KMOD_LSHIFT, "the modifier mask")
+    assert_eq(ke.key_scancode(), SCANCODE_A, "the scancode")
+    assert_eq(ke.key_code(), KEY_RETURN, "the keycode")
+    assert_eq(ke.key_mod(), KMOD_LSHIFT, "the modifier mask")
     assert(ke.key_repeat(), "and the repeat flag, which is the last byte before the padding")
 
-    var m = c.MouseMotionEvent(c.EVENT_MOUSE_MOTION, 0, 0, 3, 0, 0, 12.5, 34.25, 1.0, 2.0, [0; 84])
+    var m = c.MouseMotionEvent(EVENT_MOUSE_MOTION, 0, 0, 3, 0, 0, 12.5, 34.25, 1.0, 2.0, [0; 84])
     val mp: *c.Event = ptr_cast(&m)
     val me = Event(mp[0])
 
     assert_eq(me.mouse_x(), 12.5f32, "the motion x")
     assert_eq(me.mouse_y(), 34.25f32, "the motion y")
 
-    var b = c.MouseButtonEvent(c.EVENT_MOUSE_BUTTON_DOWN, 0, 0, 3, 0, c.BUTTON_RIGHT, true, 2, 0,
+    var b = c.MouseButtonEvent(EVENT_MOUSE_BUTTON_DOWN, 0, 0, 3, 0, BUTTON_RIGHT, true, 2, 0,
         5.0, 6.0, [0; 88])
     val bp: *c.Event = ptr_cast(&b)
     val be = Event(bp[0])
@@ -552,7 +552,7 @@ every_variant_reads_its_own_fields()
     assert_eq(be.mouse_x(), 5.0f32, "a button event carries its position at the motion offsets")
     assert_eq(be.mouse_y(), 6.0f32, "on both axes")
 
-    var w = c.MouseWheelEvent(c.EVENT_MOUSE_WHEEL, 0, 0, 3, 0, -1.0, 3.0, 0, 0.0, 0.0, [0; 84])
+    var w = c.MouseWheelEvent(EVENT_MOUSE_WHEEL, 0, 0, 3, 0, -1.0, 3.0, 0, 0.0, 0.0, [0; 84])
     val wp: *c.Event = ptr_cast(&w)
     val we = Event(wp[0])
 
@@ -564,7 +564,7 @@ every_variant_reads_its_own_fields()
     // variant puts it at, and the window id is at the end instead of the front. Every field is read
     // back rather than a representative one, because a coordinate taken from the wrong offset is
     // still a float: nothing here would fail on its own.
-    var t = c.TouchFingerEvent(c.EVENT_FINGER_MOTION, 0, 0, 7, 99, 0.25, 0.75, 0.5, -0.5, 0.5, 3,
+    var t = c.TouchFingerEvent(EVENT_FINGER_MOTION, 0, 0, 7, 99, 0.25, 0.75, 0.5, -0.5, 0.5, 3,
         [0; 72])
     val tp: *c.Event = ptr_cast(&t)
     val te = Event(tp[0])
@@ -589,7 +589,7 @@ every_variant_reads_its_own_fields()
     // shared prefix but whether `start` and `length` land past the pointer rather than inside the
     // padding beside it. A null `text` is deliberate: it is the documented empty answer, and it keeps
     // this from needing storage to outlive the assertion.
-    var ed = c.TextEditingEvent(c.EVENT_TEXT_EDITING, 0, 0, 3, 0, null, 2, 5, [0; 88])
+    var ed = c.TextEditingEvent(EVENT_TEXT_EDITING, 0, 0, 3, 0, null, 2, 5, [0; 88])
     val ep: *c.Event = ptr_cast(&ed)
     val ee = Event(ep[0])
 
@@ -599,7 +599,7 @@ every_variant_reads_its_own_fields()
     assert_eq(ee.composition_start(), 2i32, "the selected range starts past the pointer")
     assert_eq(ee.composition_length(), 5i32, "and its length follows it")
 
-    var d = c.DropEvent(c.EVENT_DROP_FILE, 0, 0, 3, 8.0, 9.0, 0, null, null, [0; 80])
+    var d = c.DropEvent(EVENT_DROP_FILE, 0, 0, 3, 8.0, 9.0, 0, null, null, [0; 80])
     val dp: *c.Event = ptr_cast(&d)
     val de = Event(dp[0])
 
@@ -608,7 +608,7 @@ every_variant_reads_its_own_fields()
     assert_eq(de.drop_data(), "", "a null payload reads as empty rather than trapping")
     assert_eq(de.drop_source(), "", "and so does a null source")
 
-    var n = c.WindowEvent(c.EVENT_WINDOW_RESIZED, 0, 0, 3, 640, 480, [0; 100])
+    var n = c.WindowEvent(EVENT_WINDOW_RESIZED, 0, 0, 3, 640, 480, [0; 100])
     val np: *c.Event = ptr_cast(&n)
     val ne = Event(np[0])
 
@@ -621,7 +621,7 @@ every_variant_reads_its_own_fields()
     assert_eq(ue.kind(), EventKind.User, "a user event is a user event")
     assert_eq(ue.user_code(), 4242i32, "carrying the code it was built with")
 
-    var t = c.TextEvent(c.EVENT_TEXT_INPUT, 0, 0, 3, 0, null, [0; 96])
+    var t = c.TextEvent(EVENT_TEXT_INPUT, 0, 0, 3, 0, null, [0; 96])
     val tp: *c.Event = ptr_cast(&t)
 
     assert_eq(Event(tp[0]).text(), "", "and a null text pointer reads as empty")
@@ -711,7 +711,7 @@ a_surface_reads_its_own_fields()
 a_surface_uploads_to_a_texture()
     assert(headless(), "SDL_Init")
 
-    val w = create_window("upload", 32, 32, c.WINDOW_HIDDEN).expect("the window opened")
+    val w = create_window("upload", 32, 32, WINDOW_HIDDEN).expect("the window opened")
     val r = w.create_renderer().expect("the renderer opened")
     val s = create_surface(16, 8, PixelFormat.Argb8888).expect("the surface was made")
     val t = r.create_texture_from_surface(s).expect("the texture was made")
@@ -726,7 +726,7 @@ a_surface_uploads_to_a_texture()
 a_renderer_draws_a_frame()
     assert(headless(), "SDL_Init")
 
-    val w = create_window("draw", 64, 48, c.WINDOW_HIDDEN).expect("the window opened")
+    val w = create_window("draw", 64, 48, WINDOW_HIDDEN).expect("the window opened")
     val r = w.create_renderer().expect("the renderer opened")
 
     assert(r.clear_to(BLACK), "cleared")
@@ -751,7 +751,7 @@ a_renderer_draws_a_frame()
 a_renderer_reads_its_pixels_back()
     assert(headless(), "SDL_Init")
 
-    val w = create_window("readback", 64, 48, c.WINDOW_HIDDEN).expect("the window opened")
+    val w = create_window("readback", 64, 48, WINDOW_HIDDEN).expect("the window opened")
     val r = w.create_renderer().expect("the renderer opened")
 
     assert(r.clear_to(rgb(10, 20, 30)), "cleared to a background")
@@ -785,7 +785,7 @@ a_renderer_reads_its_pixels_back()
 a_renderer_draws_into_a_texture()
     assert(headless(), "SDL_Init")
 
-    val w = create_window("target", 32, 32, c.WINDOW_HIDDEN).expect("the window opened")
+    val w = create_window("target", 32, 32, WINDOW_HIDDEN).expect("the window opened")
     val r = w.create_renderer().expect("the renderer opened")
     val made = r.create_texture(PixelFormat.Argb8888, TextureAccess.Target, 16, 16)
     val t = made.expect("the target texture was made")
@@ -912,7 +912,7 @@ a_blend_is_clamped_at_both_ends()
 a_window_reports_what_it_was_asked_for()
     assert(headless(), "SDL_Init")
 
-    val w = create_window("title", 100, 60, c.WINDOW_HIDDEN).expect("the window opened")
+    val w = create_window("title", 100, 60, WINDOW_HIDDEN).expect("the window opened")
     val (ww, wh) = w.size()
 
     assert_eq(ww, 100i32, "the width it was created with")
@@ -1088,23 +1088,23 @@ a_window_reports_a_safe_area_inside_itself()
 // the filter that drops duplicate taps would silently stop dropping them.
 @test
 the_touch_and_mouse_sentinels_are_sdls_own_numbers()
-    assert_eq(c.TOUCH_MOUSEID, 0xFFFFFFFFu32, "a mouse id of -1, in 32 bits")
-    assert_eq(c.MOUSE_TOUCHID, 0xFFFFFFFFFFFFFFFFu64, "and a touch id of -1, in 64")
+    assert_eq(TOUCH_MOUSEID, 0xFFFFFFFFu32, "a mouse id of -1, in 32 bits")
+    assert_eq(MOUSE_TOUCHID, 0xFFFFFFFFFFFFFFFFu64, "and a touch id of -1, in 64")
 
     // A mouse event SDL made from a finger, which is what every tap looks like on a phone unless the
     // program reads the finger events instead.
-    var m = c.MouseButtonEvent(c.EVENT_MOUSE_BUTTON_DOWN, 0, 0, 3, c.TOUCH_MOUSEID, c.BUTTON_LEFT,
+    var m = c.MouseButtonEvent(EVENT_MOUSE_BUTTON_DOWN, 0, 0, 3, TOUCH_MOUSEID, BUTTON_LEFT,
         true, 1, 0, 5.0, 6.0, [0; 88])
     val mp: *c.Event = ptr_cast(&m)
 
-    assert_eq(Event(mp[0]).mouse_which(), c.TOUCH_MOUSEID, "this one was really a finger")
+    assert_eq(Event(mp[0]).mouse_which(), TOUCH_MOUSEID, "this one was really a finger")
 
     // And the other direction: a finger event a desktop made from the mouse.
-    var t = c.TouchFingerEvent(c.EVENT_FINGER_DOWN, 0, 0, c.MOUSE_TOUCHID, 0, 0.0, 0.0, 0.0, 0.0,
+    var t = c.TouchFingerEvent(EVENT_FINGER_DOWN, 0, 0, MOUSE_TOUCHID, 0, 0.0, 0.0, 0.0, 0.0,
         1.0, 3, [0; 72])
     val tp: *c.Event = ptr_cast(&t)
 
-    assert_eq(Event(tp[0]).touch_id(), c.MOUSE_TOUCHID, "and this one was really the mouse")
+    assert_eq(Event(tp[0]).touch_id(), MOUSE_TOUCHID, "and this one was really the mouse")
 
 // **The duplicate-tap filter the README teaches, run against the real queue.** One finger down and
 // the synthesized mouse event SDL would deliver beside it, both pushed and both polled back — a
@@ -1115,11 +1115,11 @@ the_touch_and_mouse_sentinels_are_sdls_own_numbers()
 a_synthesized_tap_is_filtered_to_one()
     assert(headless(), "SDL_Init")
 
-    var f = c.TouchFingerEvent(c.EVENT_FINGER_DOWN, 0, 0, 1, 42, 0.5, 0.5, 0.0, 0.0, 1.0, 0,
+    var f = c.TouchFingerEvent(EVENT_FINGER_DOWN, 0, 0, 1, 42, 0.5, 0.5, 0.0, 0.0, 1.0, 0,
         [0; 72])
     val fp: *c.Event = ptr_cast(&f)
 
-    var m = c.MouseButtonEvent(c.EVENT_MOUSE_BUTTON_DOWN, 0, 0, 0, c.TOUCH_MOUSEID, c.BUTTON_LEFT,
+    var m = c.MouseButtonEvent(EVENT_MOUSE_BUTTON_DOWN, 0, 0, 0, TOUCH_MOUSEID, BUTTON_LEFT,
         true, 1, 0, 160.0, 240.0, [0; 88])
     val mp: *c.Event = ptr_cast(&m)
 
@@ -1138,7 +1138,7 @@ a_synthesized_tap_is_filtered_to_one()
                     taps += 1
 
                     // Keep the finger events; drop the mouse events that were really fingers.
-                    if !(e.kind() == EventKind.MouseButtonDown && e.mouse_which() == c.TOUCH_MOUSEID)
+                    if !(e.kind() == EventKind.MouseButtonDown && e.mouse_which() == TOUCH_MOUSEID)
                         filtered += 1
             None -> break
 
@@ -1151,7 +1151,7 @@ a_synthesized_tap_is_filtered_to_one()
 // layout goes wrong. A quarter of the way across a 320-wide window is 80.
 @test
 a_finger_position_scales_to_the_window()
-    var t = c.TouchFingerEvent(c.EVENT_FINGER_DOWN, 0, 0, 1, 1, 0.25, 0.75, 0.0, 0.0, 1.0, 3,
+    var t = c.TouchFingerEvent(EVENT_FINGER_DOWN, 0, 0, 1, 1, 0.25, 0.75, 0.0, 0.0, 1.0, 3,
         [0; 72])
     val tp: *c.Event = ptr_cast(&t)
     val e = Event(tp[0])

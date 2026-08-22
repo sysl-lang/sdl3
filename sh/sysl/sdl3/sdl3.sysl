@@ -1,7 +1,6 @@
 module sh.sysl.sdl3
 
 import sh.sysl.sdl3.c
-import sh.sysl.sdl3.c.INIT_VIDEO
 import sysl.text.{cstring, from_cstring}
 
 // SDL3 — a window, a renderer, an event queue, input and audio.
@@ -12,18 +11,21 @@ import sysl.text.{cstring, from_cstring}
 // carrying it would be maintaining a port. So SDL3 is installed separately and the two flags naming
 // its prefix are part of every build here — `package.hocon` says why that is deliberate.
 //
-// **It is two layers.** `sh.sysl.sdl3.c` holds everything that is C — the link directive, the
-// headers, the `c const` blocks that ask the C compiler for SDL's numbers, the opaque handles and
-// the hundred and thirty declarations. This module is what an application imports, and its job is
-// to be pleasant rather than faithful: a handle owns what it points at and frees it when the last
+// **It is two layers.** `sh.sysl.sdl3.c` holds the link directive, the opaque handles and the
+// hundred and thirty declarations. This module is what an application imports, and its job is to be
+// pleasant rather than faithful: a handle owns what it points at and frees it when the last
 // reference goes, a failure is an `Option` rather than a null, and a value out of an enumeration is
 // a variant with a name rather than a number.
 //
-// **A consumer may reach into `c` and that is fine** — SDL's masks and scancodes live there, since
-// they are SDL's own numbers and there is nothing for this layer to improve about them:
+// **The line between them is what an APPLICATION has to name, not what is a C artifact.** SDL's
+// three hundred numbers are `c const` blocks — as C as anything in this package — and they are in
+// *this* module, in `constants.sysl`, with the header clause that needs. They are what a program
+// opening a window spells, and nothing in `c` ever read one:
 //
 //     import sh.sysl.sdl3.*
-//     import sh.sysl.sdl3.c.{WINDOW_RESIZABLE, SCANCODE_ESCAPE}
+//
+//     init(INIT_VIDEO)
+//     create_window("hello", 640, 480, WINDOW_RESIZABLE)
 //
 // **`SDL_Surface` is public and ABI-stable in SDL3**, so its fields are read straight out of SDL's
 // storage rather than copied out by a shim. That is a change from SDL2, where it was opaque, and it

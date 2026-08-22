@@ -10,12 +10,14 @@ import sysl.text.from_cstring
 // right now", which is what a movement loop wants and what no sequence of events reconstructs
 // without keeping its own table.
 //
-// **The scancodes, keycodes and modifier masks live in `c`**, because they are SDL's own numbers
-// and an index space rather than a small closed set — `KeyboardState` is literally an array
-// indexed by scancode, and SDL has two hundred and forty of them. A program names the ones it
-// wants:
+// **The scancodes, keycodes and modifier masks stay numbers rather than becoming variants**,
+// because they are an index space rather than a small closed set — `KeyboardState` is literally an
+// array indexed by scancode, and SDL has two hundred and forty of them. What this layer does for
+// them is carry them, so a program names one without importing anything but this module:
 //
-//     import sh.sysl.sdl3.c.{SCANCODE_W, SCANCODE_ESCAPE, KMOD_SHIFT}
+//     import sh.sysl.sdl3.*
+//
+//     if keyboard_state().held(SCANCODE_W) then …
 
 // ## Keyboard
 
@@ -63,7 +65,7 @@ scancode_name(scancode: i32) -> string =
 key_name(key: u32) -> string = from_cstring(c.get_key_name(key)).unwrap_or("")
 
 // What the current layout makes of a physical key.
-key_from_scancode(scancode: i32) -> u32 = c.get_key_from_scancode(scancode, c.KMOD_NONE, false)
+key_from_scancode(scancode: i32) -> u32 = c.get_key_from_scancode(scancode, KMOD_NONE, false)
 
 // ## Mouse
 
@@ -81,20 +83,20 @@ enum MouseButton
 
     code(self) -> u8
         self match
-            Left -> c.BUTTON_LEFT
-            Middle -> c.BUTTON_MIDDLE
-            Right -> c.BUTTON_RIGHT
-            X1 -> c.BUTTON_X1
-            X2 -> c.BUTTON_X2
+            Left -> BUTTON_LEFT
+            Middle -> BUTTON_MIDDLE
+            Right -> BUTTON_RIGHT
+            X1 -> BUTTON_X1
+            X2 -> BUTTON_X2
             Other(n) -> n
 
     of(code: u8) -> MouseButton
         code match
-            c.BUTTON_LEFT -> Left
-            c.BUTTON_MIDDLE -> Middle
-            c.BUTTON_RIGHT -> Right
-            c.BUTTON_X1 -> X1
-            c.BUTTON_X2 -> X2
+            BUTTON_LEFT -> Left
+            BUTTON_MIDDLE -> Middle
+            BUTTON_RIGHT -> Right
+            BUTTON_X1 -> X1
+            BUTTON_X2 -> X2
             n -> Other(n)
 end MouseButton
 
@@ -122,9 +124,9 @@ struct MouseState
     x: f32
     y: f32
 
-    left(self) -> bool = (self.buttons & c.BUTTON_LMASK) != 0
-    middle(self) -> bool = (self.buttons & c.BUTTON_MMASK) != 0
-    right(self) -> bool = (self.buttons & c.BUTTON_RMASK) != 0
+    left(self) -> bool = (self.buttons & BUTTON_LMASK) != 0
+    middle(self) -> bool = (self.buttons & BUTTON_MMASK) != 0
+    right(self) -> bool = (self.buttons & BUTTON_RMASK) != 0
 end MouseState
 
 // The pointer's position in the focused window's coordinates, and its buttons.
@@ -193,26 +195,26 @@ enum SystemCursor
 
     code(self) -> i32
         self match
-            Default -> c.SYSTEM_CURSOR_DEFAULT
-            Text -> c.SYSTEM_CURSOR_TEXT
-            Wait -> c.SYSTEM_CURSOR_WAIT
-            Crosshair -> c.SYSTEM_CURSOR_CROSSHAIR
-            Progress -> c.SYSTEM_CURSOR_PROGRESS
-            NwseResize -> c.SYSTEM_CURSOR_NWSE_RESIZE
-            NeswResize -> c.SYSTEM_CURSOR_NESW_RESIZE
-            EwResize -> c.SYSTEM_CURSOR_EW_RESIZE
-            NsResize -> c.SYSTEM_CURSOR_NS_RESIZE
-            Move -> c.SYSTEM_CURSOR_MOVE
-            NotAllowed -> c.SYSTEM_CURSOR_NOT_ALLOWED
-            Pointer -> c.SYSTEM_CURSOR_POINTER
-            NwResize -> c.SYSTEM_CURSOR_NW_RESIZE
-            NResize -> c.SYSTEM_CURSOR_N_RESIZE
-            NeResize -> c.SYSTEM_CURSOR_NE_RESIZE
-            EResize -> c.SYSTEM_CURSOR_E_RESIZE
-            SeResize -> c.SYSTEM_CURSOR_SE_RESIZE
-            SResize -> c.SYSTEM_CURSOR_S_RESIZE
-            SwResize -> c.SYSTEM_CURSOR_SW_RESIZE
-            WResize -> c.SYSTEM_CURSOR_W_RESIZE
+            Default -> SYSTEM_CURSOR_DEFAULT
+            Text -> SYSTEM_CURSOR_TEXT
+            Wait -> SYSTEM_CURSOR_WAIT
+            Crosshair -> SYSTEM_CURSOR_CROSSHAIR
+            Progress -> SYSTEM_CURSOR_PROGRESS
+            NwseResize -> SYSTEM_CURSOR_NWSE_RESIZE
+            NeswResize -> SYSTEM_CURSOR_NESW_RESIZE
+            EwResize -> SYSTEM_CURSOR_EW_RESIZE
+            NsResize -> SYSTEM_CURSOR_NS_RESIZE
+            Move -> SYSTEM_CURSOR_MOVE
+            NotAllowed -> SYSTEM_CURSOR_NOT_ALLOWED
+            Pointer -> SYSTEM_CURSOR_POINTER
+            NwResize -> SYSTEM_CURSOR_NW_RESIZE
+            NResize -> SYSTEM_CURSOR_N_RESIZE
+            NeResize -> SYSTEM_CURSOR_NE_RESIZE
+            EResize -> SYSTEM_CURSOR_E_RESIZE
+            SeResize -> SYSTEM_CURSOR_SE_RESIZE
+            SResize -> SYSTEM_CURSOR_S_RESIZE
+            SwResize -> SYSTEM_CURSOR_SW_RESIZE
+            WResize -> SYSTEM_CURSOR_W_RESIZE
 end SystemCursor
 
 impl Display for SystemCursor

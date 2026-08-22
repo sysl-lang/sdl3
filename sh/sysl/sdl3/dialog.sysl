@@ -34,9 +34,9 @@ enum FileDialogKind
 
     code(self) -> i32
         self match
-            OpenFile -> c.FILEDIALOG_OPENFILE
-            SaveFile -> c.FILEDIALOG_SAVEFILE
-            OpenFolder -> c.FILEDIALOG_OPENFOLDER
+            OpenFile -> FILEDIALOG_OPENFILE
+            SaveFile -> FILEDIALOG_SAVEFILE
+            OpenFolder -> FILEDIALOG_OPENFOLDER
 end FileDialogKind
 
 impl Display for FileDialogKind

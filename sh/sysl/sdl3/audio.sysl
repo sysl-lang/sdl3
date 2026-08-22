@@ -1,7 +1,6 @@
 module sh.sysl.sdl3
 
 import sh.sysl.sdl3.c
-import sh.sysl.sdl3.c.INIT_AUDIO
 import sysl.slices.as_ptr
 import sysl.text.from_cstring
 
@@ -30,8 +29,8 @@ enum AudioFormat
 
     code(self) -> i32
         self match
-            F32 -> c.AUDIO_F32
-            S16 -> c.AUDIO_S16
+            F32 -> AUDIO_F32
+            S16 -> AUDIO_S16
 
     // SDL's own name for it — "SDL_AUDIO_F32LE" — which is a useful thing to print because it says
     // the byte order the value carries and this name does not.
@@ -102,7 +101,7 @@ quit_audio() = quit_subsystem(INIT_AUDIO)
 open_audio_stream(freq: i32, channels: i32 = 1,
                   format: AudioFormat = AudioFormat.F32) -> Option[&AudioStream]
     var spec = c.AudioSpec(format.code(), channels, freq)
-    val s = c.open_audio_device_stream(c.AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, null, null)
+    val s = c.open_audio_device_stream(AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, null, null)
 
     if s == null then return None
 

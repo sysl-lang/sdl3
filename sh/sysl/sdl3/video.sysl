@@ -43,28 +43,28 @@ enum TextInputType
 
     code(self) -> i32
         self match
-            Text -> c.TEXTINPUT_TYPE_TEXT
-            Name -> c.TEXTINPUT_TYPE_TEXT_NAME
-            Email -> c.TEXTINPUT_TYPE_TEXT_EMAIL
-            Username -> c.TEXTINPUT_TYPE_TEXT_USERNAME
-            PasswordHidden -> c.TEXTINPUT_TYPE_TEXT_PASSWORD_HIDDEN
-            PasswordVisible -> c.TEXTINPUT_TYPE_TEXT_PASSWORD_VISIBLE
-            Number -> c.TEXTINPUT_TYPE_NUMBER
-            PinHidden -> c.TEXTINPUT_TYPE_NUMBER_PASSWORD_HIDDEN
-            PinVisible -> c.TEXTINPUT_TYPE_NUMBER_PASSWORD_VISIBLE
+            Text -> TEXTINPUT_TYPE_TEXT
+            Name -> TEXTINPUT_TYPE_TEXT_NAME
+            Email -> TEXTINPUT_TYPE_TEXT_EMAIL
+            Username -> TEXTINPUT_TYPE_TEXT_USERNAME
+            PasswordHidden -> TEXTINPUT_TYPE_TEXT_PASSWORD_HIDDEN
+            PasswordVisible -> TEXTINPUT_TYPE_TEXT_PASSWORD_VISIBLE
+            Number -> TEXTINPUT_TYPE_NUMBER
+            PinHidden -> TEXTINPUT_TYPE_NUMBER_PASSWORD_HIDDEN
+            PinVisible -> TEXTINPUT_TYPE_NUMBER_PASSWORD_VISIBLE
             Other(n) -> n
 
     of(code: i32) -> TextInputType
         code match
-            c.TEXTINPUT_TYPE_TEXT -> Text
-            c.TEXTINPUT_TYPE_TEXT_NAME -> Name
-            c.TEXTINPUT_TYPE_TEXT_EMAIL -> Email
-            c.TEXTINPUT_TYPE_TEXT_USERNAME -> Username
-            c.TEXTINPUT_TYPE_TEXT_PASSWORD_HIDDEN -> PasswordHidden
-            c.TEXTINPUT_TYPE_TEXT_PASSWORD_VISIBLE -> PasswordVisible
-            c.TEXTINPUT_TYPE_NUMBER -> Number
-            c.TEXTINPUT_TYPE_NUMBER_PASSWORD_HIDDEN -> PinHidden
-            c.TEXTINPUT_TYPE_NUMBER_PASSWORD_VISIBLE -> PinVisible
+            TEXTINPUT_TYPE_TEXT -> Text
+            TEXTINPUT_TYPE_TEXT_NAME -> Name
+            TEXTINPUT_TYPE_TEXT_EMAIL -> Email
+            TEXTINPUT_TYPE_TEXT_USERNAME -> Username
+            TEXTINPUT_TYPE_TEXT_PASSWORD_HIDDEN -> PasswordHidden
+            TEXTINPUT_TYPE_TEXT_PASSWORD_VISIBLE -> PasswordVisible
+            TEXTINPUT_TYPE_NUMBER -> Number
+            TEXTINPUT_TYPE_NUMBER_PASSWORD_HIDDEN -> PinHidden
+            TEXTINPUT_TYPE_NUMBER_PASSWORD_VISIBLE -> PinVisible
             n -> Other(n)
 end TextInputType
 
@@ -101,18 +101,18 @@ enum Capitalization
 
     code(self) -> i32
         self match
-            Off -> c.CAPITALIZE_NONE
-            Sentences -> c.CAPITALIZE_SENTENCES
-            Words -> c.CAPITALIZE_WORDS
-            Letters -> c.CAPITALIZE_LETTERS
+            Off -> CAPITALIZE_NONE
+            Sentences -> CAPITALIZE_SENTENCES
+            Words -> CAPITALIZE_WORDS
+            Letters -> CAPITALIZE_LETTERS
             Other(n) -> n
 
     of(code: i32) -> Capitalization
         code match
-            c.CAPITALIZE_NONE -> Off
-            c.CAPITALIZE_SENTENCES -> Sentences
-            c.CAPITALIZE_WORDS -> Words
-            c.CAPITALIZE_LETTERS -> Letters
+            CAPITALIZE_NONE -> Off
+            CAPITALIZE_SENTENCES -> Sentences
+            CAPITALIZE_WORDS -> Words
+            CAPITALIZE_LETTERS -> Letters
             n -> Other(n)
 end Capitalization
 
@@ -142,16 +142,16 @@ enum SystemTheme
 
     code(self) -> i32
         self match
-            Unknown -> c.SYSTEM_THEME_UNKNOWN
-            Light -> c.SYSTEM_THEME_LIGHT
-            Dark -> c.SYSTEM_THEME_DARK
+            Unknown -> SYSTEM_THEME_UNKNOWN
+            Light -> SYSTEM_THEME_LIGHT
+            Dark -> SYSTEM_THEME_DARK
             Other(n) -> n
 
     of(code: i32) -> SystemTheme
         code match
-            c.SYSTEM_THEME_UNKNOWN -> Unknown
-            c.SYSTEM_THEME_LIGHT -> Light
-            c.SYSTEM_THEME_DARK -> Dark
+            SYSTEM_THEME_UNKNOWN -> Unknown
+            SYSTEM_THEME_LIGHT -> Light
+            SYSTEM_THEME_DARK -> Dark
             n -> Other(n)
 end SystemTheme
 
@@ -196,7 +196,7 @@ struct Window
     end create_renderer
 
     // SDL3 has no creation-time position, so a window that wants one sets it here. `x` and `y` may
-    // be `c.WINDOWPOS_CENTERED` or `c.WINDOWPOS_UNDEFINED`.
+    // be `WINDOWPOS_CENTERED` or `WINDOWPOS_UNDEFINED`.
     set_position(&self, x: i32, y: i32) -> bool = c.set_window_position(self.handle, x, y)
 
     position(&self) -> (i32, i32)

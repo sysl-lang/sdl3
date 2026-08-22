@@ -47,26 +47,26 @@ enum PixelFormat
 
     code(self) -> u32
         self match
-            Argb8888 -> c.PIXELFORMAT_ARGB8888
-            Rgba8888 -> c.PIXELFORMAT_RGBA8888
-            Abgr8888 -> c.PIXELFORMAT_ABGR8888
-            Rgb24 -> c.PIXELFORMAT_RGB24
-            Iyuv -> c.PIXELFORMAT_IYUV
-            Yv12 -> c.PIXELFORMAT_YV12
-            Nv12 -> c.PIXELFORMAT_NV12
-            Nv21 -> c.PIXELFORMAT_NV21
+            Argb8888 -> PIXELFORMAT_ARGB8888
+            Rgba8888 -> PIXELFORMAT_RGBA8888
+            Abgr8888 -> PIXELFORMAT_ABGR8888
+            Rgb24 -> PIXELFORMAT_RGB24
+            Iyuv -> PIXELFORMAT_IYUV
+            Yv12 -> PIXELFORMAT_YV12
+            Nv12 -> PIXELFORMAT_NV12
+            Nv21 -> PIXELFORMAT_NV21
             Other(n) -> n
 
     of(code: u32) -> PixelFormat
         code match
-            c.PIXELFORMAT_ARGB8888 -> Argb8888
-            c.PIXELFORMAT_RGBA8888 -> Rgba8888
-            c.PIXELFORMAT_ABGR8888 -> Abgr8888
-            c.PIXELFORMAT_RGB24 -> Rgb24
-            c.PIXELFORMAT_IYUV -> Iyuv
-            c.PIXELFORMAT_YV12 -> Yv12
-            c.PIXELFORMAT_NV12 -> Nv12
-            c.PIXELFORMAT_NV21 -> Nv21
+            PIXELFORMAT_ARGB8888 -> Argb8888
+            PIXELFORMAT_RGBA8888 -> Rgba8888
+            PIXELFORMAT_ABGR8888 -> Abgr8888
+            PIXELFORMAT_RGB24 -> Rgb24
+            PIXELFORMAT_IYUV -> Iyuv
+            PIXELFORMAT_YV12 -> Yv12
+            PIXELFORMAT_NV12 -> Nv12
+            PIXELFORMAT_NV21 -> Nv21
             n -> Other(n)
 
     // Whether this is one of the planar formats, which are the ones `update_yuv` and `update_nv`
@@ -121,9 +121,9 @@ enum Colorspace
 
     code(self) -> u32
         self match
-            Bt709Limited -> c.COLORSPACE_BT709_LIMITED
-            Bt601Limited -> c.COLORSPACE_BT601_LIMITED
-            Jpeg -> c.COLORSPACE_JPEG
+            Bt709Limited -> COLORSPACE_BT709_LIMITED
+            Bt601Limited -> COLORSPACE_BT601_LIMITED
+            Jpeg -> COLORSPACE_JPEG
 end Colorspace
 
 impl Display for Colorspace
@@ -159,11 +159,11 @@ enum BlendMode
 
     code(self) -> u32
         self match
-            Off -> c.BLENDMODE_NONE
-            Blend -> c.BLENDMODE_BLEND
-            Add -> c.BLENDMODE_ADD
-            Mod -> c.BLENDMODE_MOD
-            Mul -> c.BLENDMODE_MUL
+            Off -> BLENDMODE_NONE
+            Blend -> BLENDMODE_BLEND
+            Add -> BLENDMODE_ADD
+            Mod -> BLENDMODE_MOD
+            Mul -> BLENDMODE_MUL
 end BlendMode
 
 impl Display for BlendMode
@@ -194,16 +194,16 @@ enum TextureAccess
 
     code(self) -> i32
         self match
-            Static -> c.TEXTUREACCESS_STATIC
-            Streaming -> c.TEXTUREACCESS_STREAMING
-            Target -> c.TEXTUREACCESS_TARGET
+            Static -> TEXTUREACCESS_STATIC
+            Streaming -> TEXTUREACCESS_STREAMING
+            Target -> TEXTUREACCESS_TARGET
             Other(n) -> n
 
     of(code: i32) -> TextureAccess
         code match
-            c.TEXTUREACCESS_STATIC -> Static
-            c.TEXTUREACCESS_STREAMING -> Streaming
-            c.TEXTUREACCESS_TARGET -> Target
+            TEXTUREACCESS_STATIC -> Static
+            TEXTUREACCESS_STREAMING -> Streaming
+            TEXTUREACCESS_TARGET -> Target
             n -> Other(n)
 end TextureAccess
 
@@ -236,16 +236,16 @@ enum ScaleMode
 
     code(self) -> i32
         self match
-            Nearest -> c.SCALEMODE_NEAREST
-            Linear -> c.SCALEMODE_LINEAR
-            PixelArt -> c.SCALEMODE_PIXELART
+            Nearest -> SCALEMODE_NEAREST
+            Linear -> SCALEMODE_LINEAR
+            PixelArt -> SCALEMODE_PIXELART
             Other(n) -> n
 
     of(code: i32) -> ScaleMode
         code match
-            c.SCALEMODE_NEAREST -> Nearest
-            c.SCALEMODE_LINEAR -> Linear
-            c.SCALEMODE_PIXELART -> PixelArt
+            SCALEMODE_NEAREST -> Nearest
+            SCALEMODE_LINEAR -> Linear
+            SCALEMODE_PIXELART -> PixelArt
             n -> Other(n)
 end ScaleMode
 
@@ -405,7 +405,7 @@ struct Texture
     // What it was created as — read back out of SDL's own property bag rather than remembered here.
     access(&self) -> TextureAccess =
         TextureAccess.of(i32(number_property(c.get_texture_properties(self.handle),
-            "SDL.texture.access", i64(c.TEXTUREACCESS_STATIC))))
+            "SDL.texture.access", i64(TEXTUREACCESS_STATIC))))
 
     format(&self) -> PixelFormat =
         PixelFormat.of(u32(number_property(c.get_texture_properties(self.handle),

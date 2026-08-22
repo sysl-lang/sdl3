@@ -7,13 +7,12 @@ on-screen keyboard, and the lifecycle events an app is stopped and restarted by.
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.2.6" }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.0" }
 }
 ```
 
 ```sysl
 import sh.sysl.sdl3.*
-import sh.sysl.sdl3.c.{INIT_VIDEO, WINDOW_RESIZABLE}
 
 main()
     init(INIT_VIDEO)
@@ -37,28 +36,40 @@ main()
 There is no teardown. The renderer and the window go when the last reference to each does, and the
 process ending does the rest.
 
-## Two layers, and why a program may reach into the lower one
+## Two layers, and where the line falls
 
-`sh.sysl.sdl3.c` holds everything that is C: the link directive, the headers, the blocks that ask
-the C compiler for SDL's numbers, the six opaque handles, the ABI structs and the hundred and
-thirty declarations. `sh.sysl.sdl3` is what an application imports.
+`sh.sysl.sdl3.c` holds the link directive, the six opaque handles, the ABI structs and the hundred
+and thirty declarations. `sh.sysl.sdl3` is what an application imports — and it is the **only**
+thing an application imports.
 
 The split keeps two jobs apart. The lower one has to be **faithful** — a signature that disagrees
 with the header links perfectly and corrupts the call at run time — and the upper one has to be
 **pleasant**, which is a different question and would otherwise be answered in the same breath.
 
-**SDL's masks and scancodes stay in `c`, and a program names the ones it wants.** They are an index
-space rather than a small closed set — `KeyboardState` is literally an array indexed by scancode,
-and SDL has two hundred and forty of them — so there is nothing for the upper layer to improve
-about them:
+**What decides the layer is whether an application has to name the thing, not whether it is a C
+artifact.** SDL's three hundred numbers are `c const` blocks, and a `c const` needs a header clause —
+as C as anything in this package. They are in the upper layer anyway, in `constants.sysl`, because
+`INIT_VIDEO` and `WINDOW_RESIZABLE` are what a program spells to open a window. Nothing in `c` ever
+read one of them.
 
 ```sysl
 import sh.sysl.sdl3.*
-import sh.sysl.sdl3.c.{WINDOW_RESIZABLE, SCANCODE_ESCAPE, KMOD_SHIFT}
+
+init(INIT_VIDEO)
+create_window("hello", 640, 480, WINDOW_RESIZABLE)
+
+if keyboard_state().held(SCANCODE_W) then …
 ```
 
-`c.Rect`, `c.FRect`, `c.FPoint` and `c.Vertex` live there for the same reason — they are SDL's own
-layouts and cross by pointer. `rect`, `frect` and `fpoint` build one without naming the type.
+**The masks and scancodes stay numbers rather than becoming variants**, which is a separate question
+from which module they sit in. They are an index space rather than a small closed set —
+`KeyboardState` is literally an array indexed by scancode, and SDL has two hundred and forty of
+them — so there is nothing for the upper layer to improve about them beyond carrying them.
+
+`c.Rect`, `c.FRect`, `c.FPoint` and `c.Vertex` are the one thing still reached for by name: they are
+SDL's own layouts, `c`'s own declarations take them, and a module may not depend on one that depends
+on it, so they cannot be re-spelled up here without a transparent type alias, which the compiler does
+not have. `rect`, `frect` and `fpoint` build one without naming the type, which covers most uses.
 
 ## The numbers are asked for, not written down
 
