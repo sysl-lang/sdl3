@@ -440,6 +440,8 @@ extern "SDL_ResumeAudioStreamDevice" resume_audio_stream_device(stream: *AudioSt
 extern "SDL_PauseAudioStreamDevice" pause_audio_stream_device(stream: *AudioStream) -> bool
 extern "SDL_PutAudioStreamData" put_audio_stream_data(stream: *AudioStream, buf: *u8, len: i32) -> bool
 extern "SDL_GetAudioStreamQueued" get_audio_stream_queued(stream: *AudioStream) -> i32
+extern "SDL_GetAudioStreamData" get_audio_stream_data(stream: *AudioStream, buf: *u8, len: i32) -> i32
+extern "SDL_GetAudioStreamAvailable" get_audio_stream_available(stream: *AudioStream) -> i32
 extern "SDL_ClearAudioStream" clear_audio_stream(stream: *AudioStream) -> bool
 extern "SDL_FlushAudioStream" flush_audio_stream(stream: *AudioStream) -> bool
 extern "SDL_GetAudioStreamGain" get_audio_stream_gain(stream: *AudioStream) -> f32

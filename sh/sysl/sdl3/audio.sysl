@@ -1,10 +1,10 @@
 module sh.sysl.sdl3
 
 import sh.sysl.sdl3.c
-import sysl.slices.as_ptr
+import sysl.slices.{as_mut_ptr, as_ptr}
 import sysl.text.from_cstring
 
-// Audio playback, on the queue model.
+// Audio playback and recording, on the queue model.
 //
 // **SDL runs its own audio thread and pulls from a stream's queue**, which is what opening a device
 // stream with a null callback selects. The program synthesises or decodes a finished buffer and
@@ -18,6 +18,21 @@ import sysl.text.from_cstring
 //
 // Opening several streams on the default device is fine and is how overlapping effects play at
 // once — SDL mixes them.
+//
+// **Recording is the same model run the other way.** SDL's thread fills the stream from the
+// microphone and the program takes what has arrived whenever it likes — once a frame is the usual
+// rhythm — so a recording stream is an ordinary `AudioStream` read with `read` rather than fed with
+// `put`.
+//
+// **Opening the microphone is a permission on every platform that has one, and it is asked at the
+// open.** On Android the consuming application's `AndroidManifest.xml` has to declare
+//
+//     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+//
+// and SDL's Android layer then asks the user from inside `open_recording_stream`, which blocks until
+// they answer; a refusal, or a manifest without the line, makes the open answer `None`, with
+// `error()` saying "This app doesn't have RECORD_AUDIO permission". On macOS the system asks once,
+// on behalf of whatever launched the program — the terminal, for a program run from one.
 
 // What a sample looks like.
 enum AudioFormat
@@ -45,7 +60,8 @@ impl Display for AudioFormat
 
         display_str(s, out, fmt)
 
-// A playback voice: samples go in, the device takes them out.
+// A voice on a device. A playback stream takes samples in and the device takes them out; a
+// recording stream is the reverse, the device putting samples in for the program to read.
 struct AudioStream
     handle: *c.AudioStream
 
@@ -72,6 +88,31 @@ struct AudioStream
     // Bytes still queued and not yet taken by the device. Zero means the voice is idle, which is
     // how a player picks a free stream rather than cutting off a sound still playing.
     queued(&self) -> i32 = c.get_audio_stream_queued(self.handle)
+
+    // Take recorded float samples into `samples` — as many as have arrived, and never more than
+    // fit — and answer how many were written. Zero is the ordinary answer when nothing new has been
+    // recorded since the last read, so a frame loop may call this every frame without waiting.
+    // `None` is SDL refusing the read, with `error()` saying why. For a stream opened as `F32`.
+    read(&self, samples: []f32) -> Option[usize]
+        if samples.len == 0 then return Some(0)
+
+        val n = c.get_audio_stream_data(self.handle, ptr_cast(as_mut_ptr(samples)), i32(samples.len * 4))
+
+        if n < 0 then None else Some(usize(n) / 4)
+    end read
+
+    // The same for bytes in the stream's own sample format, answering the byte count.
+    read_bytes(&self, bytes: []u8) -> Option[usize]
+        if bytes.len == 0 then return Some(0)
+
+        val n = c.get_audio_stream_data(self.handle, as_mut_ptr(bytes), i32(bytes.len))
+
+        if n < 0 then None else Some(usize(n))
+    end read_bytes
+
+    // Bytes recorded and waiting to be read — `queued`'s counterpart on the other side of the
+    // stream. Divide by the sample size, four for `F32`, for a count of samples.
+    available(&self) -> i32 = c.get_audio_stream_available(self.handle)
 
     // Hand over whatever partial sample frame is buffered, so the tail of a sound is not held back
     // waiting for more. For the end of a clip, not for every push.
@@ -110,3 +151,20 @@ open_audio_stream(freq: i32, channels: i32 = 1,
     stream.resume()
     Some(stream)
 end open_audio_stream
+
+// Open a recording stream on the default microphone and start it. `freq`, `channels` and `format`
+// are what the program reads, whatever the device itself records at: SDL converts on its own
+// thread. This is the call that asks for permission where the platform has one — see the top of
+// this file — so `None` here is as likely to be the user saying no as a machine with no microphone.
+open_recording_stream(freq: i32, channels: i32 = 1,
+                      format: AudioFormat = AudioFormat.F32) -> Option[&AudioStream]
+    var spec = AudioSpec(format.code(), channels, freq)
+    val s = c.open_audio_device_stream(AUDIO_DEVICE_DEFAULT_RECORDING, &spec, null, null)
+
+    if s == null then return None
+
+    val stream: &AudioStream = AudioStream(s)
+
+    stream.resume()
+    Some(stream)
+end open_recording_stream

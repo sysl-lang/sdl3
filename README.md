@@ -1,13 +1,14 @@
 # sdl3
 
 SDL3 for sysl — a window, an accelerated renderer, the event queue, keyboard, mouse and touch, the
-clipboard, the system file dialog, queued audio, and the monotonic clock a frame loop is paced by.
+clipboard, the system file dialog, queued audio playback and microphone recording, and the monotonic
+clock a frame loop is paced by.
 It binds what a phone needs as well as what a desktop does: the safe area, the display scale, the
 on-screen keyboard, and the lifecycle events an app is stopped and restarted by.
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.1" }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.2" }
 }
 ```
 
@@ -494,13 +495,41 @@ not start, which would mean adjusting reference counts outside anything this pac
 the atomicity of. The queue model asks that of nobody and costs a buffer's latency. `sdl3-mixer` is
 the answer for anything more.
 
+**Recording is the same model run the other way**: SDL's thread fills the stream from the microphone,
+and the program takes what has arrived whenever it likes — once a frame is the usual rhythm.
+
+```
+val mic = open_recording_stream(48000).expect("a microphone")   // mono f32 by default
+var samples: []f32 = [0.0; 4096]
+
+loop
+    val n = mic.read(samples).unwrap_or(0)      // as many as have arrived, never more than fit
+    analyse(samples[0..<n])
+```
+
+`available()` is the byte count a read would take, in the format the program asked for;
+`read_bytes` is the same read in the stream's own sample format.
+
+**Opening the microphone is a permission, asked at the open.** On Android the application's
+`AndroidManifest.xml` has to declare
+
+```
+<uses-permission android:name="android.permission.RECORD_AUDIO" />
+```
+
+and SDL's Android layer then asks the user from inside `open_recording_stream`, which blocks until
+they answer. A refusal — or a manifest without the line, which Android refuses without asking — makes
+the open answer `None`, with `error()` saying *"This app doesn't have RECORD_AUDIO permission"*. On
+macOS the system asks once, on behalf of whatever launched the program: the terminal, for a program
+run from one.
+
 ## Tests
 
 ```
 sysl test .
 ```
 
-Fifty-six tests, run headless against a real SDL3 — the dummy video and audio drivers create
+Fifty-nine tests, run headless against a real SDL3 — the dummy video and audio drivers create
 windows, renderers, textures and devices and draw into memory, so nothing here needs a display or a
 sound card.
 

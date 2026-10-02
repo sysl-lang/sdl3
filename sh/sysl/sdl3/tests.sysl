@@ -1011,6 +1011,98 @@ an_audio_stream_takes_samples()
     assert(s.pause(), "paused")
     assert(s.resume(), "resumed")
 
+// Wait for a recording stream to have something, at most a second, and answer what it has.
+private recorded(s: &AudioStream) -> i32
+    var rounds = 0
+
+    loop
+        if s.available() > 0 || rounds == 200 then return s.available()
+
+        delay(5)
+        rounds += 1
+end recorded
+
+// The dummy backend records too — silence, at the rate asked for — so the read path runs with no
+// microphone and no permission to ask. The buffer starts at a value silence is not, so what was
+// written and what was not are told apart, and it is larger than a second of audio so that one read
+// drains everything that had arrived.
+@test
+a_recording_stream_reads_what_arrived()
+    set_hint("SDL_AUDIO_DRIVER", "dummy")
+
+    assert(init_audio(), "the audio subsystem came up")
+
+    val s = open_recording_stream(48000, 1).expect("the stream opened")
+    val before = recorded(s)
+
+    assert(before > 0, "the device recorded something")
+    assert(s.pause(), "paused, so nothing more arrives while this looks")
+
+    var samples: []f32 = [1.0; 48000]
+    val waiting = s.available()
+    val n = s.read(samples).expect("the read succeeded")
+
+    assert_eq(n * 4, usize(waiting), "it took everything that had arrived, in samples")
+    assert_eq(samples[0], 0.0f32, "and what it wrote is the dummy's silence")
+    assert_eq(samples[n - 1], 0.0f32, "up to the count it answered")
+    assert_eq(samples[n], 1.0f32, "and not one sample past it")
+    assert_eq(s.available(), 0i32, "so nothing is left")
+    assert_eq(s.read(samples), Some(0usize), "and a read with nothing waiting answers zero")
+
+// The edges of a read: an empty slice takes nothing and leaves what was waiting where it was, a
+// slice shorter than what is waiting takes only what fits, and the byte form counts bytes.
+@test
+a_recording_read_takes_only_what_fits()
+    set_hint("SDL_AUDIO_DRIVER", "dummy")
+
+    assert(init_audio(), "the audio subsystem came up")
+
+    val s = open_recording_stream(48000, 1).expect("the stream opened")
+
+    assert(recorded(s) >= 16, "the device recorded at least four samples")
+    assert(s.pause(), "paused")
+
+    val waiting = s.available()
+    var none: []f32 = []
+
+    assert_eq(s.read(none), Some(0usize), "an empty slice takes nothing")
+    assert_eq(s.available(), waiting, "and leaves it all waiting")
+
+    var two: []f32 = [1.0; 2]
+
+    assert_eq(s.read(two), Some(2usize), "a short slice takes only what fits")
+    assert_eq(s.available(), waiting - 8, "eight bytes fewer are waiting")
+
+    var bytes: []u8 = [0xff; 8]
+
+    assert_eq(s.read_bytes(bytes), Some(8usize), "the byte form answers bytes")
+    assert_eq(bytes[7], 0u8, "and wrote the silence a float zero is made of")
+    assert_eq(s.available(), waiting - 16, "and took eight more")
+
+// `available` counts what a read will hand over, in the format the program asked for — not what the
+// device put in. The float stream opened first fixes the device's format, so the 16-bit stream
+// beside it is converted on the way through, and its two sides differ by half.
+@test
+a_recording_stream_counts_what_a_read_will_take()
+    set_hint("SDL_AUDIO_DRIVER", "dummy")
+
+    assert(init_audio(), "the audio subsystem came up")
+
+    val f = open_recording_stream(48000, 1).expect("the float stream opened")
+    val s = open_recording_stream(48000, 1, AudioFormat.S16).expect("the 16-bit stream opened")
+
+    assert(recorded(s) > 0, "the device recorded something")
+    assert(f.pause(), "paused the float stream")
+    assert(s.pause(), "and the 16-bit one")
+
+    val waiting = s.available()
+
+    assert(s.queued() > waiting, "the device's floats outweigh the samples they convert to")
+
+    var bytes: []u8 = [0xff; 192000]
+
+    assert_eq(s.read_bytes(bytes), Some(usize(waiting)), "and a read takes exactly what was available")
+
 // ## File dialogs
 
 // The callback's tally, in module storage rather than captured, so that the two dialog tests count
