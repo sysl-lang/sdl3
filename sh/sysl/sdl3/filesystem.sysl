@@ -1,0 +1,30 @@
+module sh.sysl.sdl3
+
+import sh.sysl.sdl3.c
+import sysl.text.{cstring, from_cstring}
+
+// Where an application keeps what it writes for itself.
+
+// The directory this application may write its own files to, created if it was not there, and
+// ending in the platform's separator so a file name is simply appended. `None` when the platform
+// will not give one, with the reason in `error()`.
+//
+// **It is the one directory that means the same thing on a phone and on a desktop.** On Android it
+// is the app's private internal storage (`Context.getFilesDir()`), which nothing else can read and
+// which goes when the app is uninstalled; on macOS it is `~/Library/Application Support/<org>/<app>/`;
+// on Linux `$XDG_DATA_HOME/<org>/<app>/`. `org` may be `""`, which leaves that level out where the
+// platform has one.
+//
+// It does not need `init()` first, and the string is copied out and SDL's freed before it returns.
+pref_path(org: string, app: string) -> Option[string]
+    val o = cstring(org)
+    val a = cstring(app)
+    val p = c.get_pref_path(o.ptr, a.ptr)
+
+    if p == null then return None
+
+    val s = from_cstring(p).ok()
+
+    c.free(p)
+    s
+end pref_path

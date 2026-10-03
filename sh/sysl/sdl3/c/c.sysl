@@ -455,6 +455,10 @@ extern "SDL_SetClipboardText" set_clipboard_text(text: *u8) -> bool
 extern "SDL_HasClipboardText" has_clipboard_text() -> bool
 extern "SDL_GetPreferredLocales" get_preferred_locales(count: *i32) -> **Locale
 
+// `SDL_filesystem.h`: the per-application directory, created on first ask and answered with a
+// trailing separator. The string is SDL's to allocate and the caller's to `SDL_free`.
+extern "SDL_GetPrefPath" get_pref_path(org: *u8, app: *u8) -> *u8
+
 // `SDL_OpenURL` lives in `SDL_misc.h` rather than beside these, and is here because it is the other
 // call that hands something to the rest of the system and gets nothing back.
 extern "SDL_OpenURL" open_url(url: *u8) -> bool

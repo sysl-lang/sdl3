@@ -4,6 +4,7 @@ module sh.sysl.sdl3
 import sh.sysl.sdl3.c
 import sysl.text.{cstring, from_cstring}
 import sysl.buf.{Buf, buf}
+import sysl.text.Search
 
 // The package's own tests, run against a real SDL3.
 //
@@ -969,6 +970,26 @@ the_clipboard_round_trips()
     assert_eq(clipboard_text(), "hello, sysl", "which came back")
 
     quit()
+
+// ## The preference directory
+
+// SDL creates the directory on the first ask, so the test can see it exists, and removes it again
+// afterwards: the org level is one nothing else on the machine uses.
+@test
+the_pref_path_is_a_directory_named_for_the_app()
+    val org = "sh.sysl.sdl3-tests"
+    val dir = pref_path(org, "pref path").unwrap_or("")
+
+    assert(dir != "", s"no pref path: ${error()}")
+    assert(dir.ends_with("/"), s"a trailing separator: $dir")
+    assert(dir.contains("sh.sysl.sdl3-tests/pref path/"), s"org, then app: $dir")
+    assert(sysl.fs.is_dir(dir), "and SDL made it")
+
+    // Asking twice answers the same directory and is not an error the second time.
+    assert_eq(pref_path(org, "pref path"), Some(dir), "the same on a second ask")
+
+    sysl.fs.remove_dir(dir).unwrap()
+    sysl.fs.remove_dir(dir[0..<dir.len - "pref path/".len]).unwrap()
 
 // SDL answers one allocation holding both an array of pointers and the strings they point at, and
 // this walks it to the terminator and frees it once. Some platforms report nothing, which is not a

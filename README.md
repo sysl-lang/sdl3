@@ -441,6 +441,14 @@ works at all, since a program drawing its own pixels has no link for the platfor
 **`true` means the system accepted it, not that the user saw anything**, and nothing comes back. On a
 phone the program is backgrounded by the act of opening one, so the lifecycle events fire.
 
+## Where an application keeps its own files
+
+`pref_path("org", "app")` answers the directory an application may write its settings and saved
+state to, creating it on the first ask and ending it with a separator. It is the one directory that
+means the same thing everywhere: the app's private internal storage on Android, and
+`~/Library/Application Support/org/app/` on macOS. It needs no `init()`. `None` is the platform
+declining, with the reason in `error()`.
+
 ## Text with nothing installed
 
 `renderer.debug_text(x, y, "hello")` draws a line in a fixed 8x8 bitmap font **carried inside SDL
