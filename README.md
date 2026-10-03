@@ -441,6 +441,24 @@ works at all, since a program drawing its own pixels has no link for the platfor
 **`true` means the system accepted it, not that the user saw anything**, and nothing comes back. On a
 phone the program is backgrounded by the act of opening one, so the lifecycle events fire.
 
+## The screensaver, and the two Android calls
+
+**SDL keeps the display on while video is up**, unless `HINT_VIDEO_ALLOW_SCREENSAVER` is "1" at
+`init`. `enable_screen_saver()` lets it sleep again, `disable_screen_saver()` holds it on, and
+`screen_saver_enabled()` says which; on Android the switch is the window's `FLAG_KEEP_SCREEN_ON`.
+
+`send_android_message(command, param)` posts a number pair to the activity's `onUnhandledMessage`,
+on the UI thread — the way into Java that needs no JNI on this side. Commands start at
+`ANDROID_COMMAND_USER`; the ones below are SDL's own and are refused rather than sent.
+
+`request_android_permission("android.permission.CAMERA", answer)` puts the question to the user.
+`answer` is a `&sync Fn(bool) -> unit` because SDL may call it on another thread, much later; a
+permission already held is answered at once.
+
+**Both answer `false` off Android and touch nothing**, so a program that runs in both places calls
+them unconditionally. SDL exports them from its Android build only, which is why their two
+primitives live in `__android__/` with a `false`-answering twin beside it.
+
 ## Where an application keeps its own files
 
 `pref_path("org", "app")` answers the directory an application may write its settings and saved
@@ -537,7 +555,7 @@ run from one.
 sysl test .
 ```
 
-Fifty-nine tests, run headless against a real SDL3 — the dummy video and audio drivers create
+Sixty-four tests, run headless against a real SDL3 — the dummy video and audio drivers create
 windows, renderers, textures and devices and draw into memory, so nothing here needs a display or a
 sound card.
 

@@ -463,6 +463,15 @@ extern "SDL_GetPrefPath" get_pref_path(org: *u8, app: *u8) -> *u8
 // call that hands something to the rest of the system and gets nothing back.
 extern "SDL_OpenURL" open_url(url: *u8) -> bool
 
+// `SDL_video.h`. SDL suspends the screensaver when video starts unless a hint says otherwise, and on
+// Android these two are what set and clear the window's `FLAG_KEEP_SCREEN_ON`.
+extern "SDL_ScreenSaverEnabled" screen_saver_enabled() -> bool
+extern "SDL_EnableScreenSaver" enable_screen_saver() -> bool
+extern "SDL_DisableScreenSaver" disable_screen_saver() -> bool
+
+// SDL's Android-only calls are in `__android__/android.sysl` beside this file: no other SDL exports
+// them, so a desktop link must never name them.
+
 // ## File dialogs
 
 extern "SDL_ShowFileDialogWithProperties" show_file_dialog_with_properties(kind: i32,

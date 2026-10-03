@@ -1,0 +1,8 @@
+// The two Android calls `system.sysl` is built on, everywhere SDL has not got them: nothing is
+// posted and nothing is asked.
+
+module sh.sysl.sdl3
+
+private[sdl3] posted(command: u32, param: i32) -> bool = false
+
+private[sdl3] asked(permission: *u8, cb: *extern(*u8, *u8, bool) -> unit, userdata: *u8) -> bool = false

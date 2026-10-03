@@ -1,0 +1,88 @@
+module sh.sysl.sdl3
+
+import sh.sysl.sdl3.c
+import sysl.text.cstring
+
+// The screensaver, and the two calls SDL offers only on Android.
+//
+// **SDL suspends the screensaver as soon as video starts**, unless `HINT_VIDEO_ALLOW_SCREENSAVER` is
+// set to "1" before `init` — so a program that does nothing keeps the display on for as long as it
+// runs. On a desktop that holds off the screensaver and the display's sleep; on Android it is the
+// window's `FLAG_KEEP_SCREEN_ON`, which is cleared again by `enable_screen_saver`.
+//
+// **The Android calls are declared everywhere and do something only there.** SDL exports them from
+// its Android build and from no other, so on any other target the functions below answer `false`
+// without calling anything, and a program that runs in both places calls them unconditionally. What
+// differs is two primitives, `posted` and `asked`, one file per side under `__android__` and
+// `__macos,linux,windows__`.
+//
+// sysl gap: the split would be one `#if android` here, but under sysl 0.0.160 a module with an `#if`
+// in any of its files loses its declarations when the package is a dependency rather than the root
+// — an importer is told "'sh.sysl.sdl3' declares no 'ticks'". The selector directories say the same
+// thing and are not affected.
+
+// Let the display sleep again — the system's own timeout applies.
+enable_screen_saver() -> bool = c.enable_screen_saver()
+
+// Keep the display on for as long as the program runs, or until `enable_screen_saver`.
+disable_screen_saver() -> bool = c.disable_screen_saver()
+
+// Whether the display may sleep. `false` is SDL's default once video is up.
+screen_saver_enabled() -> bool = c.screen_saver_enabled()
+
+// Read at `init`: "1" leaves the screensaver alone rather than suspending it.
+val HINT_VIDEO_ALLOW_SCREENSAVER: string = "SDL_VIDEO_ALLOW_SCREENSAVER"
+
+// The first command number SDL leaves to the application. Anything below it is SDL's own, and is
+// handled by `SDLActivity` rather than passed on.
+const ANDROID_COMMAND_USER: u32 = 0x8000
+
+// Post `command` and `param` to the activity's UI thread, where they arrive in `SDLActivity`'s
+// `onUnhandledMessage(command, param)` — the one way into Java that needs no JNI on this side.
+//
+// **`true` means the message was queued, not that anything handled it**, and it never waits. A
+// command below `ANDROID_COMMAND_USER` is one of SDL's own and is refused rather than sent. `false`
+// on every target but Android.
+send_android_message(command: u32, param: i32) -> bool =
+    command >= ANDROID_COMMAND_USER && posted(command, param)
+
+// One permission request in flight. It holds a reference to itself until SDL answers, so a caller
+// need not keep anything alive; the answer drops it.
+//
+// **It is `&sync` because the answer may arrive on another thread** — SDL says so, and on Android it
+// is the UI thread whenever the user had to be asked. The reference counts are therefore atomic,
+// and the callback is a `&sync Fn`, which is what lets the compiler check what it captured.
+struct PermissionRequest
+    private me: Option[&sync PermissionRequest]
+    private answer: &sync Fn(bool) -> unit
+
+private permission_answered(ud: *u8, permission: *u8, granted: bool)
+    val r: *PermissionRequest = ptr_cast(ud)
+    val cb = r.answer
+
+    // The self-reference may be the last one, so the callback is read out before it goes.
+    r.me = None
+    cb(granted)
+
+// Ask the user for an Android permission — `"android.permission.RECORD_AUDIO"` — and call `answer`
+// with the outcome.
+//
+// **`answer` may run on another thread, and possibly much later**, after the user has dealt with a
+// system dialog. A permission already granted is answered at once, usually before this returns.
+// `false` means the request could not be made, and `answer` will not run — which is the answer on
+// every target but Android, where there is nothing to ask.
+//
+// Opening a recording device or a camera asks by itself; this is for everything else.
+@crossing(answer)
+request_android_permission(permission: string, answer: &sync Fn(bool) -> unit) -> bool
+    val p = cstring(permission)
+    var r: &sync PermissionRequest = PermissionRequest(None, answer)
+
+    r.me = Some(r)
+
+    if asked(p.ptr, &permission_answered, ptr_cast(&*r)) then return true
+
+    // Refused, so SDL will never answer and the request lets go of itself here instead.
+    r.me = None
+    false
+end request_android_permission

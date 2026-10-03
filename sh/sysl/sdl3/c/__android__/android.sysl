@@ -1,0 +1,9 @@
+// `SDL_system.h`'s Android calls, which it declares under `SDL_PLATFORM_ANDROID` and which no other
+// build of SDL exports.
+
+module sh.sysl.sdl3.c
+
+extern "SDL_SendAndroidMessage" send_android_message(command: u32, param: i32) -> bool
+extern "SDL_RequestAndroidPermission" request_android_permission(permission: *u8,
+                                                                 cb: *extern(*u8, *u8, bool) -> unit,
+                                                                 userdata: *u8) -> bool

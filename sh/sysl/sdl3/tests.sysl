@@ -1446,6 +1446,69 @@ an_empty_url_is_refused()
 
     quit()
 
+// ## The screensaver
+
+// **SDL suspends it when video starts**, which is the default every program gets and the reason
+// `enable_screen_saver` exists. Each call is then read back through SDL's own state, so a binding
+// with the two names swapped is caught here rather than by a phone that sleeps.
+//
+// **The state is what is asserted, not the return value.** SDL records the switch and then asks the
+// backend to apply it, and the dummy backend answers "That operation is not supported" — so both
+// calls return `false` here while the state moves exactly as it does on a real display.
+@test
+the_screensaver_is_suspended_by_video_and_switched_both_ways()
+    assert(headless(), "SDL_Init")
+
+    assert(!screen_saver_enabled(), "video starts with the screensaver suspended")
+
+    enable_screen_saver()
+    assert(screen_saver_enabled(), "and the display may sleep again")
+
+    disable_screen_saver()
+    assert(!screen_saver_enabled(), "and it is suspended once more")
+
+    quit()
+
+// The hint that changes the default, read at `init`.
+@test
+the_hint_lets_the_screensaver_alone()
+    set_hint(HINT_VIDEO_ALLOW_SCREENSAVER, "1")
+    assert(headless(), "SDL_Init")
+
+    assert(screen_saver_enabled(), "video left it alone")
+
+    quit()
+    reset_hint(HINT_VIDEO_ALLOW_SCREENSAVER)
+
+// ## Android
+
+private struct Asked
+    times: int
+
+// **Off Android both calls answer `false` and touch nothing**, which is what lets a program call them
+// unconditionally. The callback in particular must not run: SDL documents that a refused request is
+// never answered, and a desktop that answered anyway would be a second meaning for `false`.
+@test
+the_android_calls_answer_false_everywhere_else()
+    if os() == Os.Android then return
+
+    assert(!send_android_message(ANDROID_COMMAND_USER + 1, 5), "no activity to post to")
+
+    var asked: &sync Asked = Asked(0)
+
+    assert(!request_android_permission("android.permission.CAMERA", (granted) -> asked.times += 1),
+           "nothing to ask")
+    assert_eq(asked.times, 0, "and nothing answered")
+
+// SDL's own commands sit below `ANDROID_COMMAND_USER` and are refused before they are sent, on every
+// target — one of them is the keep-screen-on switch, and a program reaching it by number would
+// fight `enable_screen_saver`.
+@test
+an_sdl_command_number_is_refused()
+    assert(!send_android_message(5, 1), "SDL's COMMAND_SET_KEEP_SCREEN_ON")
+    assert(!send_android_message(ANDROID_COMMAND_USER - 1, 0), "the last number below the user range")
+    assert_eq(ANDROID_COMMAND_USER, 0x8000u32, "SDLActivity.COMMAND_USER")
+
 // ## Debug text
 
 // **SDL's built-in font, which is the whole of text with no dependencies.** What can be checked
