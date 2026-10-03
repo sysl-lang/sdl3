@@ -8,7 +8,7 @@ on-screen keyboard, and the lifecycle events an app is stopped and restarted by.
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.3" }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.4" }
 }
 ```
 
@@ -86,8 +86,8 @@ the same pointer, and satisfies both names everywhere — so this costs nothing 
 package's tests check it by handing a value built above to a declaration written below. `rect`,
 `frect` and `fpoint` still build one without naming the type at all, which covers most uses.
 
-This is what needs sysl **0.0.67**, the release a transparent alias over a struct arrived in, and
-`package.hocon` states that floor.
+This needs sysl **0.0.67**, the release a transparent alias over a struct arrived in; the package's
+floor in `package.hocon` is higher, **0.0.161**, for the `#if android` in `system.sysl`.
 
 **`Surface` is the one name deliberately not aliased.** `sh.sysl.sdl3` already declares an owning
 `Surface` that frees what it points at when the last reference goes; SDL's raw `SDL_Surface` is a
@@ -457,7 +457,7 @@ permission already held is answered at once.
 
 **Both answer `false` off Android and touch nothing**, so a program that runs in both places calls
 them unconditionally. SDL exports them from its Android build only, which is why their two
-primitives live in `__android__/` with a `false`-answering twin beside it.
+primitives sit under an `#if android` with a `false`-answering twin in its `#else`.
 
 ## Where an application keeps its own files
 

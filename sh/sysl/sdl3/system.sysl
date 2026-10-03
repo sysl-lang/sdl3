@@ -13,13 +13,7 @@ import sysl.text.cstring
 // **The Android calls are declared everywhere and do something only there.** SDL exports them from
 // its Android build and from no other, so on any other target the functions below answer `false`
 // without calling anything, and a program that runs in both places calls them unconditionally. What
-// differs is two primitives, `posted` and `asked`, one file per side under `__android__` and
-// `__macos,linux,windows__`.
-//
-// sysl gap: the split would be one `#if android` here, but under sysl 0.0.160 a module with an `#if`
-// in any of its files loses its declarations when the package is a dependency rather than the root
-// — an importer is told "'sh.sysl.sdl3' declares no 'ticks'". The selector directories say the same
-// thing and are not affected.
+// differs is two primitives, `posted` and `asked`, split by the `#if android` below.
 
 // Let the display sleep again — the system's own timeout applies.
 enable_screen_saver() -> bool = c.enable_screen_saver()
@@ -36,6 +30,18 @@ val HINT_VIDEO_ALLOW_SCREENSAVER: string = "SDL_VIDEO_ALLOW_SCREENSAVER"
 // The first command number SDL leaves to the application. Anything below it is SDL's own, and is
 // handled by `SDLActivity` rather than passed on.
 const ANDROID_COMMAND_USER: u32 = 0x8000
+
+#if android
+private posted(command: u32, param: i32) -> bool = c.send_android_message(command, param)
+
+private asked(permission: *u8, cb: *extern(*u8, *u8, bool) -> unit, userdata: *u8) -> bool =
+    c.request_android_permission(permission, cb, userdata)
+#else
+// Nothing is posted and nothing is asked where SDL has not got the calls.
+private posted(command: u32, param: i32) -> bool = false
+
+private asked(permission: *u8, cb: *extern(*u8, *u8, bool) -> unit, userdata: *u8) -> bool = false
+#endif
 
 // Post `command` and `param` to the activity's UI thread, where they arrive in `SDLActivity`'s
 // `onUnhandledMessage(command, param)` — the one way into Java that needs no JNI on this side.
