@@ -286,6 +286,14 @@ impl Display for EventKind
 
         display_str(s, out, fmt)
 
+// One arm of the union, read out of it BY VALUE. The pointer is taken and dereferenced inside the
+// one call, on storage the caller owns, so nothing outlives it. An accessor taking `self` holds a
+// copy that dies when it returns, which is why the views below answer the arm itself rather than a
+// pointer into `self.rec`: such a pointer would point into a dead frame by the time it was read.
+private arm[T](rec: c.Event) -> T
+    val p: *T = ptr_cast(&rec)
+    *p
+
 // Any event. It is SDL's 128-byte union — the three fields every event begins with, then the
 // variant — and the accessors below reinterpret it into whichever view the field belongs to.
 struct Event
@@ -299,7 +307,7 @@ struct Event
 
     // ## Keyboard
 
-    private key(self) -> *c.KeyboardEvent = ptr_cast(&self.rec)
+    private key(self) -> c.KeyboardEvent = arm(self.rec)
 
     // The physical key, an SDL scancode — the same number `KeyboardState.held` is indexed by, and
     // the one to use for a game's movement keys, since it does not move with the layout. `c`'s
@@ -319,11 +327,11 @@ struct Event
 
     // ## Mouse
 
-    private motion(self) -> *c.MouseMotionEvent = ptr_cast(&self.rec)
+    private motion(self) -> c.MouseMotionEvent = arm(self.rec)
 
-    private button(self) -> *c.MouseButtonEvent = ptr_cast(&self.rec)
+    private button(self) -> c.MouseButtonEvent = arm(self.rec)
 
-    private wheel(self) -> *c.MouseWheelEvent = ptr_cast(&self.rec)
+    private wheel(self) -> c.MouseWheelEvent = arm(self.rec)
 
     // The cursor position a motion event reports, in window coordinates. A button event carries the
     // position at the same offsets, so this reads either.
@@ -347,7 +355,7 @@ struct Event
 
     // ## Touch
 
-    private finger(self) -> *c.TouchFingerEvent = ptr_cast(&self.rec)
+    private finger(self) -> c.TouchFingerEvent = arm(self.rec)
 
     // **Where the finger is, normalized to `0..1` across the window — not pixels.** This is the one
     // place touch and mouse disagree about units, and the disagreement is silent: a `0.5` used as a
@@ -387,7 +395,7 @@ struct Event
 
     // ## Text input
 
-    private text_event(self) -> *c.TextEvent = ptr_cast(&self.rec)
+    private text_event(self) -> c.TextEvent = arm(self.rec)
 
     // The typed text of a `TextInput`, UTF-8. SDL owns the string and frees it once the event is
     // handled, so it is copied out here.
@@ -397,7 +405,7 @@ struct Event
         if p == null then "" else from_cstring(p).unwrap_or("")
     end text
 
-    private editing(self) -> *c.TextEditingEvent = ptr_cast(&self.rec)
+    private editing(self) -> c.TextEditingEvent = arm(self.rec)
 
     // **The part of a `TextEditing` composition the input method has selected**, as an offset and a
     // length into the `text` above. This is what draws the underline a CJK or accent-composing
@@ -415,7 +423,7 @@ struct Event
 
     // ## Drag and drop
 
-    private drop_event(self) -> *c.DropEvent = ptr_cast(&self.rec)
+    private drop_event(self) -> c.DropEvent = arm(self.rec)
 
     // The dropped path or text. Empty for the payload-less `DropBegin` and `DropComplete`. SDL frees
     // the string after the event is handled, so this copies.
@@ -438,7 +446,7 @@ struct Event
 
     // ## Windows
 
-    private window(self) -> *c.WindowEvent = ptr_cast(&self.rec)
+    private window(self) -> c.WindowEvent = arm(self.rec)
 
     // Which window the event belongs to, matching `Window.id`. Nearly every windowed variant carries
     // it at the same offset, so this reads a key, mouse, text, drop or window event alike.
@@ -456,7 +464,7 @@ struct Event
 
     // ## User events
 
-    private user(self) -> *c.UserEvent = ptr_cast(&self.rec)
+    private user(self) -> c.UserEvent = arm(self.rec)
 
     // The `code` a program put on an event it pushed itself.
     user_code(self) -> i32 = self.user().code

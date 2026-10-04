@@ -8,7 +8,7 @@ on-screen keyboard, and the lifecycle events an app is stopped and restarted by.
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.4" }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.5" }
 }
 ```
 

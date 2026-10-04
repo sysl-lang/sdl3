@@ -544,6 +544,33 @@ an_event_round_trips_through_the_queue()
     assert(seen, "the user event was polled back")
     quit()
 
+// **An accessor's answer may not depend on what ran after it.** Each view of the union is read out
+// of a copy of the event the accessor was handed, and that copy is gone when the accessor returns —
+// so a view handed back as a pointer into it reads whatever the next call left in that frame. This
+// interleaves two events of different kinds, many times over, so every read follows a call that
+// had the same frame full of the other event's bytes. Run under AddressSanitizer with
+// `ASAN_OPTIONS=detect_stack_use_after_return=1` it fails on the first read of a pointer view.
+@test
+an_accessor_reads_the_event_and_not_a_dead_frame()
+    var k = c.KeyboardEvent(EVENT_KEY_DOWN, 0, 1, 3, 0, SCANCODE_A, KEY_RETURN,
+        KMOD_LSHIFT, 0, true, true, [0; 90])
+    val kp: *c.Event = ptr_cast(&k)
+    val ke = Event(kp[0])
+
+    var m = c.MouseMotionEvent(EVENT_MOUSE_MOTION, 0, 2, 9, 0, 0, 12.5, 34.25, 1.0, 2.0,
+        [255; 84])
+    val mp: *c.Event = ptr_cast(&m)
+    val me = Event(mp[0])
+
+    for _ in 0..<10000
+        assert_eq(ke.key_scancode(), SCANCODE_A, "the scancode, after a mouse read")
+        assert_eq(me.mouse_x(), 12.5f32, "the motion x, after a key read")
+        assert(ke.key_repeat(), "the repeat flag, after a mouse read")
+        assert_eq(me.window_id(), 9u32, "the mouse event's window, after a key read")
+        assert_eq(ke.key_mod(), KMOD_LSHIFT, "the modifiers, after a mouse read")
+        assert_eq(me.mouse_y(), 34.25f32, "the motion y, after a key read")
+        assert_eq(ke.window_id(), 3u32, "the key event's window, after a mouse read")
+
 // **Every accessor's offset, checked in one place.** Each variant is built as C lays it out, then
 // reinterpreted as an `Event` and read back through the public accessors — so a field declared at
 // the wrong offset, or a view struct missing a pad, fails here rather than answering plausible
