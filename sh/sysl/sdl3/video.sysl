@@ -187,11 +187,11 @@ struct Window
     // lets SDL pick the best one, which is what a program almost always wants.
     create_renderer(&self, name: string = "") -> Option[&Renderer]
         val r = if name == "" then
-                c.create_renderer(self.handle, null)
-            else
-                val n = cstring(name)
+                    c.create_renderer(self.handle, null)
+                else
+                    val n = cstring(name)
 
-                c.create_renderer(self.handle, n.ptr)
+                    c.create_renderer(self.handle, n.ptr)
 
         if r == null then None else Some(Renderer(r))
     end create_renderer
