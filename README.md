@@ -6,6 +6,8 @@ clock a frame loop is paced by.
 It binds what a phone needs as well as what a desktop does: the safe area, the display scale, the
 on-screen keyboard, and the lifecycle events an app is stopped and restarted by.
 
+*An independent sysl package for SDL. It is not affiliated with or endorsed by SDL's authors or trademark holders.*
+
 ```
 dependencies {
   sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.6" }
