@@ -321,6 +321,22 @@ struct Window
 
     raise(&self) -> bool = c.raise_window(self.handle)
 
+    // Ask the window manager to maximize, minimize or restore the window. These are requests, and
+    // many platforms act on them later: `sync` waits (up to SDL's own timeout) for the pending
+    // change to land, after which `flags()` reports `WINDOW_MAXIMIZED` / `WINDOW_MINIMIZED` as they
+    // now stand. A platform or driver that cannot do it answers false.
+    maximize(&self) -> bool = c.maximize_window(self.handle)
+
+    minimize(&self) -> bool = c.minimize_window(self.handle)
+
+    restore(&self) -> bool = c.restore_window(self.handle)
+
+    sync(&self) -> bool = c.sync_window(self.handle)
+
+    is_maximized(&self) -> bool = (self.flags() & WINDOW_MAXIMIZED) != 0
+
+    is_minimized(&self) -> bool = (self.flags() & WINDOW_MINIMIZED) != 0
+
     // The id events carry in their `window_id` field, which is how a program with more than one
     // window tells which an event belongs to.
     id(&self) -> u32 = c.get_window_id(self.handle)

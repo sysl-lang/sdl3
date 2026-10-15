@@ -10,7 +10,7 @@ on-screen keyboard, and the lifecycle events an app is stopped and restarted by.
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.6" }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.7" }
 }
 ```
 
@@ -513,6 +513,14 @@ field belongs to — so there is no shim and no hand-written offset arithmetic a
 A field is only meaningful for the matching kind. That is what a union means and no binding can make
 it otherwise: match on `kind()` first.
 
+`register_events(count)` reserves a range of event types for the program's own use and answers the
+first, or `None` when SDL has none left; `user_event_of(kind, code)` builds one to `push_event`, and
+it polls back as `EventKind.Other(kind)`.
+
+A window is asked to `maximize()`, `minimize()` and `restore()`, and `sync()` waits for the platform
+to act; `is_maximized()` and `is_minimized()` read the state back from `flags()`. Under the dummy
+video driver the requests may be refused, so the tests pin that the readers agree with the flags.
+
 ## Audio
 
 Playback is on the **queue model**: SDL runs its own audio thread and pulls from the stream, and the
@@ -557,7 +565,7 @@ run from one.
 sysl test .
 ```
 
-Sixty-four tests, run headless against a real SDL3 — the dummy video and audio drivers create
+Sixty-seven tests, run headless against a real SDL3 — the dummy video and audio drivers create
 windows, renderers, textures and devices and draw into memory, so nothing here needs a display or a
 sound card.
 

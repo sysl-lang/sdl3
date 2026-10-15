@@ -299,6 +299,10 @@ extern "SDL_SetWindowResizable" set_window_resizable(window: *Window, resizable:
 extern "SDL_ShowWindow" show_window(window: *Window) -> bool
 extern "SDL_HideWindow" hide_window(window: *Window) -> bool
 extern "SDL_RaiseWindow" raise_window(window: *Window) -> bool
+extern "SDL_MaximizeWindow" maximize_window(window: *Window) -> bool
+extern "SDL_MinimizeWindow" minimize_window(window: *Window) -> bool
+extern "SDL_RestoreWindow" restore_window(window: *Window) -> bool
+extern "SDL_SyncWindow" sync_window(window: *Window) -> bool
 extern "SDL_GetWindowID" get_window_id(window: *Window) -> u32
 extern "SDL_StartTextInput" start_text_input(window: *Window) -> bool
 extern "SDL_StartTextInputWithProperties" start_text_input_with_properties(window: *Window,
@@ -404,6 +408,7 @@ extern "SDL_PollEvent" poll_event(event: *Event) -> bool
 extern "SDL_WaitEvent" wait_event(event: *Event) -> bool
 extern "SDL_WaitEventTimeout" wait_event_timeout(event: *Event, ms: i32) -> bool
 extern "SDL_PushEvent" push_event(event: *Event) -> bool
+extern "SDL_RegisterEvents" register_events(count: i32) -> u32
 extern "SDL_PumpEvents" pump_events()
 extern "SDL_FlushEvents" flush_events(min: u32, max: u32)
 extern "SDL_AddEventWatch" add_event_watch(f: *extern(*u8, *Event) -> bool, ud: *u8) -> bool

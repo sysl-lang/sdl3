@@ -544,6 +544,64 @@ an_event_round_trips_through_the_queue()
     assert(seen, "the user event was polled back")
     quit()
 
+// Each call hands out a fresh range, and an event pushed with a registered type comes back as that
+// type — which is what says the base reached SDL and is not a made-up number.
+@test
+registered_event_types_are_distinct_and_poll_back()
+    assert(headless(), "SDL_Init")
+
+    val a = register_events(2).expect("the first range")
+    val b = register_events(1).expect("the second range")
+
+    assert(a != 0u32, "not zero")
+    assert(b != 0u32, "not zero either")
+    assert(a != b, "distinct")
+    assert(b >= a + 2u32, "and the second does not overlap the first's two types")
+    assert(register_events(0).is_none(), "an empty range is refused")
+
+    assert(push_event(user_event_of(b, 77)), "SDL_PushEvent")
+
+    var seen = false
+
+    loop
+        poll_event() match
+            Some(e) ->
+                if e.kind() == EventKind.Other(b)
+                    assert_eq(e.user_code(), 77i32, "the code came back")
+                    seen = true
+            None -> break
+
+    assert(seen, "the registered event was polled back")
+    quit()
+
+// Maximize, minimize and restore are requests; the dummy driver may refuse them, so this pins that
+// the calls are safe, that `sync` answers, and that the readers agree with the raw flags.
+@test
+window_state_calls_and_readers_agree_with_the_flags()
+    assert(headless(), "SDL_Init")
+
+    val w = create_window("state", 64, 48, WINDOW_RESIZABLE | WINDOW_HIDDEN).expect("the window opened")
+
+    assert(!w.is_minimized(), "not minimized at first")
+    assert(!w.is_maximized(), "nor maximized")
+
+    val max_ok = w.maximize()
+    w.sync()
+    assert_eq(w.is_maximized(), (w.flags() & WINDOW_MAXIMIZED) != 0, "reader matches flag")
+    if max_ok
+        assert(!w.is_minimized(), "a maximized window is not minimized")
+
+    val min_ok = w.minimize()
+    w.sync()
+    assert_eq(w.is_minimized(), (w.flags() & WINDOW_MINIMIZED) != 0, "reader matches flag")
+    if min_ok
+        assert(!w.is_maximized(), "minimizing leaves maximized")
+
+    w.restore()
+    w.sync()
+    assert(!w.is_minimized(), "restored is not minimized")
+    assert(!w.is_maximized(), "nor maximized")
+
 // **An accessor's answer may not depend on what ran after it.** Each view of the union is read out
 // of a copy of the event the accessor was handed, and that copy is gone when the accessor returns —
 // so a view handed back as a pointer into it reads whatever the next call left in that frame. This

@@ -509,12 +509,29 @@ end push_event
 // because those take `self` by value: the pointer they answer points into the method's own copy, so
 // reading through it is fine and writing through it would write into storage that is about to go.
 // That is why they are private, and why anything that *builds* an event constructs the variant.
-user_event(code: i32) -> Event
-    var u = c.UserEvent(EVENT_USER, 0, 0, 0, code, null, null, [0; 88])
+user_event(code: i32) -> Event = user_event_of(EVENT_USER, code)
+
+// A user event of a type `register_events` handed out, which is how a library keeps its events
+// apart from the application's. It polls back as `EventKind.Other(kind)`.
+user_event_of(kind: u32, code: i32) -> Event
+    var u = c.UserEvent(kind, 0, 0, 0, code, null, null, [0; 88])
     val p: *c.Event = ptr_cast(&u)
 
     Event(p[0])
-end user_event
+end user_event_of
+
+// Reserve `count` consecutive event types for the program's own use and answer the first. `None`
+// when SDL has run out (it holds a finite range) or `count` is not positive; SDL signals failure
+// with 0, and this also treats `(Uint32)-1` as failure. Each call hands out a
+// fresh range, so two libraries cannot collide.
+register_events(count: i32) -> Option[u32]
+    val base = c.register_events(count)
+
+    if base == 0 || base == 0xFFFFFFFFu32
+        return None
+
+    Some(base)
+end register_events
 
 // Gather pending input from the platform without taking anything off the queue. `poll_event` does
 // this itself, so it is only needed by a program that reads `KeyboardState.held` or `mouse_state`
