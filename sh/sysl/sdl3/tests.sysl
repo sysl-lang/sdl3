@@ -602,6 +602,46 @@ window_state_calls_and_readers_agree_with_the_flags()
     assert(!w.is_minimized(), "restored is not minimized")
     assert(!w.is_maximized(), "nor maximized")
 
+// A window's property bag: the native-handle names are SDL's own strings, the dummy driver has no
+// native window so those reads are absent, and a value set in the bag reads back by type.
+@test
+window_properties_read_back_and_native_handles_are_absent_headless()
+    assert(headless(), "SDL_Init")
+
+    assert_eq(PROP_WINDOW_COCOA_WINDOW_POINTER, "SDL.window.cocoa.window", "cocoa window")
+    assert_eq(PROP_WINDOW_COCOA_METAL_VIEW_TAG_NUMBER, "SDL.window.cocoa.metal_view_tag", "metal tag")
+    assert_eq(PROP_WINDOW_WIN32_HWND_POINTER, "SDL.window.win32.hwnd", "hwnd")
+    assert_eq(PROP_WINDOW_X11_DISPLAY_POINTER, "SDL.window.x11.display", "x11 display")
+    assert_eq(PROP_WINDOW_X11_WINDOW_NUMBER, "SDL.window.x11.window", "x11 window")
+    assert_eq(PROP_WINDOW_WAYLAND_SURFACE_POINTER, "SDL.window.wayland.surface", "wayland")
+
+    val w = create_window("props", 64, 48, WINDOW_HIDDEN).expect("the window opened")
+    val p = w.properties()
+
+    assert(p.id != 0u32, "a window always has a bag")
+    assert_eq(p.id, w.properties().id, "and it is the same bag each time")
+
+    assert(p.pointer(PROP_WINDOW_COCOA_WINDOW_POINTER).is_none(), "no NSWindow headless")
+    assert(p.pointer(PROP_WINDOW_WIN32_HWND_POINTER).is_none(), "no HWND headless")
+    assert(p.pointer(PROP_WINDOW_X11_DISPLAY_POINTER).is_none(), "no X display headless")
+    assert(p.pointer(PROP_WINDOW_WAYLAND_SURFACE_POINTER).is_none(), "no surface headless")
+    assert(!p.has(PROP_WINDOW_COCOA_WINDOW_POINTER), "not present")
+    assert_eq(p.number(PROP_WINDOW_X11_WINDOW_NUMBER, 77), 77, "a missing number is the default")
+    assert_eq(p.number(PROP_WINDOW_COCOA_METAL_VIEW_TAG_NUMBER), 0, "default default is zero")
+    assert(p.text("no.such.string").is_none(), "a missing string is None")
+    assert(p.boolean("no.such.flag", true), "a missing boolean is the default")
+    assert(!p.boolean("no.such.flag"), "and false by default")
+
+    assert(set_number_property(p.id, "test.number", 42), "number set")
+    assert(set_string_property(p.id, "test.string", "hello"), "string set")
+    assert(set_boolean_property(p.id, "test.flag", true), "boolean set")
+    assert_eq(p.number("test.number", -1), 42, "number reads back")
+    assert_eq(p.text("test.string").expect("a string"), "hello", "string reads back")
+    assert(p.boolean("test.flag"), "boolean reads back")
+    assert(p.has("test.number"), "has sees it")
+
+    quit()
+
 // **An accessor's answer may not depend on what ran after it.** Each view of the union is read out
 // of a copy of the event the accessor was handed, and that copy is gone when the accessor returns —
 // so a view handed back as a pointer into it reads whatever the next call left in that frame. This

@@ -10,7 +10,7 @@ on-screen keyboard, and the lifecycle events an app is stopped and restarted by.
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.7" }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.8" }
 }
 ```
 
@@ -517,6 +517,14 @@ it otherwise: match on `kind()` first.
 first, or `None` when SDL has none left; `user_event_of(kind, code)` builds one to `push_event`, and
 it polls back as `EventKind.Other(kind)`.
 
+`window.properties()` answers the window's property bag, where SDL keeps the native handles:
+`pointer(name)` is `Option[*u8]` (`None` where absent), and `number`, `text`, `boolean` and `has`
+read the other types. The names are `PROP_WINDOW_COCOA_WINDOW_POINTER`,
+`PROP_WINDOW_COCOA_METAL_VIEW_TAG_NUMBER`, `PROP_WINDOW_WIN32_HWND_POINTER`,
+`PROP_WINDOW_X11_DISPLAY_POINTER`, `PROP_WINDOW_X11_WINDOW_NUMBER` and
+`PROP_WINDOW_WAYLAND_SURFACE_POINTER`. The bag is borrowed from the window and not destroyed by the
+program; under the dummy driver none of the native handles exist.
+
 A window is asked to `maximize()`, `minimize()` and `restore()`, and `sync()` waits for the platform
 to act; `is_maximized()` and `is_minimized()` read the state back from `flags()`. Under the dummy
 video driver the requests may be refused, so the tests pin that the readers agree with the flags.
@@ -565,7 +573,7 @@ run from one.
 sysl test .
 ```
 
-Sixty-seven tests, run headless against a real SDL3 — the dummy video and audio drivers create
+Sixty-eight tests, run headless against a real SDL3 — the dummy video and audio drivers create
 windows, renderers, textures and devices and draw into memory, so nothing here needs a display or a
 sound card.
 

@@ -401,6 +401,11 @@ extern "SDL_GetNumberProperty" get_number_property(props: u32, name: *u8, defaul
 extern "SDL_SetStringProperty" set_string_property(props: u32, name: *u8, value: *u8) -> bool
 extern "SDL_SetPointerProperty" set_pointer_property(props: u32, name: *u8, value: *u8) -> bool
 extern "SDL_SetBooleanProperty" set_boolean_property(props: u32, name: *u8, value: bool) -> bool
+extern "SDL_GetPointerProperty" get_pointer_property(props: u32, name: *u8, default: *u8) -> *u8
+extern "SDL_GetStringProperty" get_string_property(props: u32, name: *u8, default: *u8) -> *u8
+extern "SDL_GetBooleanProperty" get_boolean_property(props: u32, name: *u8, default: bool) -> bool
+extern "SDL_HasProperty" has_property(props: u32, name: *u8) -> bool
+extern "SDL_GetWindowProperties" get_window_properties(window: *Window) -> u32
 
 // ## Events
 

@@ -1,7 +1,7 @@
 module sh.sysl.sdl3
 
 import sh.sysl.sdl3.c
-import sysl.text.cstring
+import sysl.text.{cstring, from_cstring}
 
 // Windows, displays, and the text input that belongs to a window.
 //
@@ -179,9 +179,70 @@ frect(x: f32, y: f32, w: f32, h: f32) -> FRect = FRect(x, y, w, h)
 // A point in renderer coordinates.
 fpoint(x: f32, y: f32) -> FPoint = FPoint(x, y)
 
+// The names of the window properties that hold the platform's own handles, spelled as SDL spells
+// them. A pointer or number is only present on the platform and video driver that makes it: ask for
+// the Cocoa window on macOS, the HWND on Windows, and so on; elsewhere, and under the dummy driver,
+// the read answers `None`.
+val PROP_WINDOW_COCOA_WINDOW_POINTER: string = "SDL.window.cocoa.window"
+val PROP_WINDOW_COCOA_METAL_VIEW_TAG_NUMBER: string = "SDL.window.cocoa.metal_view_tag"
+val PROP_WINDOW_WIN32_HWND_POINTER: string = "SDL.window.win32.hwnd"
+val PROP_WINDOW_X11_DISPLAY_POINTER: string = "SDL.window.x11.display"
+val PROP_WINDOW_X11_WINDOW_NUMBER: string = "SDL.window.x11.window"
+val PROP_WINDOW_WAYLAND_SURFACE_POINTER: string = "SDL.window.wayland.surface"
+
+// A bag of typed values SDL keeps for an object, read by name. It borrows: the bag belongs to the
+// window it came from and dies with it, so a `Properties` is not kept past its window and is never
+// destroyed by the program.
+struct Properties
+    id: u32
+
+    // Whether the bag has a value under `name`, of any type.
+    has(self, name: string) -> bool
+        val n = cstring(name)
+
+        c.has_property(self.id, n.ptr)
+    end has
+
+    // A pointer value, or `None` where the property is absent or null. The pointer is the
+    // platform's own and valid only while the window lives — an `NSWindow *`, an `HWND`, a
+    // `wl_surface *`.
+    pointer(self, name: string) -> Option[*u8]
+        val n = cstring(name)
+        val p = c.get_pointer_property(self.id, n.ptr, null)
+
+        if p == null then None else Some(p)
+    end pointer
+
+    // A numeric value, or `default` where the bag has none.
+    number(self, name: string, default: i64 = 0) -> i64
+        val n = cstring(name)
+
+        c.get_number_property(self.id, n.ptr, default)
+    end number
+
+    // A string value, or `None` where the property is absent.
+    text(self, name: string) -> Option[string]
+        val n = cstring(name)
+        val p = c.get_string_property(self.id, n.ptr, null)
+
+        if p == null then None else Some(from_cstring(p).unwrap_or(""))
+    end text
+
+    // A boolean value, or `default` where the bag has none.
+    boolean(self, name: string, default: bool = false) -> bool
+        val n = cstring(name)
+
+        c.get_boolean_property(self.id, n.ptr, default)
+    end boolean
+end Properties
+
 // An operating-system window.
 struct Window
     handle: *c.Window
+
+    // The window's property bag, which is where SDL keeps the native handles (see the
+    // `PROP_WINDOW_*` names). A window always has one.
+    properties(&self) -> Properties = Properties(c.get_window_properties(self.handle))
 
     // Make a renderer for this window. `name` selects a render driver by name; the empty string
     // lets SDL pick the best one, which is what a program almost always wants.
