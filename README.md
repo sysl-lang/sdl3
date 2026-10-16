@@ -10,7 +10,7 @@ on-screen keyboard, and the lifecycle events an app is stopped and restarted by.
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.8" }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.9" }
 }
 ```
 
@@ -525,6 +525,11 @@ read the other types. The names are `PROP_WINDOW_COCOA_WINDOW_POINTER`,
 `PROP_WINDOW_WAYLAND_SURFACE_POINTER`. The bag is borrowed from the window and not destroyed by the
 program; under the dummy driver none of the native handles exist.
 
+`get_hint(name)` reads a hint back as `Option[string]` (`None` where unset) and
+`get_hint_boolean(name, default)` as a flag, beside `set_hint` and `reset_hint`. Every `SDL_HINT_*`
+name in `SDL_hints.h` is a `HINT_*` constant, such as `HINT_QUIT_ON_LAST_WINDOW_CLOSE` and
+`HINT_VIDEO_DRIVER`, spelled as the header spells it.
+
 A window is asked to `maximize()`, `minimize()` and `restore()`, and `sync()` waits for the platform
 to act; `is_maximized()` and `is_minimized()` read the state back from `flags()`. Under the dummy
 video driver the requests may be refused, so the tests pin that the readers agree with the flags.
@@ -573,7 +578,7 @@ run from one.
 sysl test .
 ```
 
-Sixty-eight tests, run headless against a real SDL3 — the dummy video and audio drivers create
+Seventy-two tests, run headless against a real SDL3 — the dummy video and audio drivers create
 windows, renderers, textures and devices and draw into memory, so nothing here needs a display or a
 sound card.
 

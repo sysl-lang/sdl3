@@ -120,6 +120,25 @@ reset_hint(name: string) -> bool
     c.reset_hint(n.ptr)
 end reset_hint
 
+// A hint's current value, or `None` when it is neither set nor given a default by SDL. The text is
+// copied, so it stays valid after the hint changes.
+get_hint(name: string) -> Option[string]
+    val n = cstring(name)
+
+    val p = c.get_hint(n.ptr)
+    if p == null then return None
+
+    Some(from_cstring(p).unwrap_or(""))
+end get_hint
+
+// A hint read as a flag: unset gives `default`, `"0"`, `"false"` and the empty string are `false`,
+// and anything else is `true`.
+get_hint_boolean(name: string, default: bool) -> bool
+    val n = cstring(name)
+
+    c.get_hint_boolean(n.ptr, default)
+end get_hint_boolean
+
 // Whether the caller is on the thread SDL was initialised on — the only one that may create a
 // window, touch a renderer, or pump events. Worth asserting at the head of anything a worker thread
 // has to hand off rather than do itself.
@@ -141,9 +160,9 @@ end open_url
 // A hint's name is a string rather than a number, so these are the one group of SDL's constants
 // `c const` cannot answer for — `15 §7` refuses a string from C deliberately, since it would have
 // to be written with two quotings for one value.
-val HINT_RENDER_VSYNC: string = "SDL_RENDER_VSYNC"
-val HINT_RENDER_DRIVER: string = "SDL_RENDER_DRIVER"
-val HINT_VIDEO_DRIVER: string = "SDL_VIDEO_DRIVER"
+//
+// Every `SDL_HINT_*` name in SDL's `SDL_hints.h` is in `hints.sysl`; `HINT_VIDEO_ALLOW_SCREENSAVER`
+// and `HINT_FILE_DIALOG_DRIVER` stay beside the calls they explain.
 
 // Selects a file-dialog backend by name. Only Linux has more than one to choose between — "portal"
 // and "zenity"; every other platform has exactly one and **fails the dialog** if this is set to

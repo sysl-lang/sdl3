@@ -1605,6 +1605,49 @@ the_hint_lets_the_screensaver_alone()
     quit()
     reset_hint(HINT_VIDEO_ALLOW_SCREENSAVER)
 
+// ## Hints
+
+@test
+a_hint_reads_back_what_was_set()
+    reset_hint(HINT_QUIT_ON_LAST_WINDOW_CLOSE)
+    assert(set_hint(HINT_QUIT_ON_LAST_WINDOW_CLOSE, "0"), "SDL_SetHint")
+
+    assert_eq(get_hint(HINT_QUIT_ON_LAST_WINDOW_CLOSE), Some("0"), "the string comes back")
+    assert(!get_hint_boolean(HINT_QUIT_ON_LAST_WINDOW_CLOSE, true), "0 is false whatever the default")
+
+    assert(set_hint(HINT_QUIT_ON_LAST_WINDOW_CLOSE, "1"), "SDL_SetHint")
+    assert(get_hint_boolean(HINT_QUIT_ON_LAST_WINDOW_CLOSE, false), "1 is true whatever the default")
+
+    reset_hint(HINT_QUIT_ON_LAST_WINDOW_CLOSE)
+
+@test
+an_unset_hint_is_none_and_takes_the_default()
+    val name = "SDL_SYSL_TEST_NO_SUCH_HINT"
+    assert_eq(get_hint(name), None, "nothing set")
+    assert(get_hint_boolean(name, true), "default true")
+    assert(!get_hint_boolean(name, false), "default false")
+
+@test
+a_hint_value_outlives_the_next_change()
+    set_hint(HINT_VIDEO_DRIVER, "dummy")
+    val first = get_hint(HINT_VIDEO_DRIVER)
+    set_hint(HINT_VIDEO_DRIVER, "other")
+
+    assert_eq(first, Some("dummy"), "the earlier read was copied")
+    assert_eq(get_hint(HINT_VIDEO_DRIVER), Some("other"), "the new value")
+
+    set_hint(HINT_VIDEO_DRIVER, "dummy")
+
+@test
+the_hint_names_are_the_headers_strings()
+    assert_eq(HINT_QUIT_ON_LAST_WINDOW_CLOSE, "SDL_QUIT_ON_LAST_WINDOW_CLOSE", "quit on last window close")
+    assert_eq(HINT_VIDEO_DRIVER, "SDL_VIDEO_DRIVER", "video driver")
+    assert_eq(HINT_RENDER_VSYNC, "SDL_RENDER_VSYNC", "render vsync")
+    assert_eq(HINT_RENDER_DRIVER, "SDL_RENDER_DRIVER", "render driver")
+    assert_eq(HINT_FILE_DIALOG_DRIVER, "SDL_FILE_DIALOG_DRIVER", "file dialog driver")
+    assert_eq(HINT_VIDEO_ALLOW_SCREENSAVER, "SDL_VIDEO_ALLOW_SCREENSAVER", "screensaver")
+    assert_eq(HINT_AUDIO_DRIVER, "SDL_AUDIO_DRIVER", "audio driver")
+
 // ## Android
 
 private struct Asked

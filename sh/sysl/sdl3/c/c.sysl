@@ -279,6 +279,8 @@ extern "SDL_GetPerformanceFrequency" get_performance_frequency() -> u64
 
 extern "SDL_SetHint" set_hint(name: *u8, value: *u8) -> bool
 extern "SDL_ResetHint" reset_hint(name: *u8) -> bool
+extern "SDL_GetHint" get_hint(name: *u8) -> *u8
+extern "SDL_GetHintBoolean" get_hint_boolean(name: *u8, default_value: bool) -> bool
 extern "SDL_IsMainThread" is_main_thread() -> bool
 
 // ## Windows and displays
