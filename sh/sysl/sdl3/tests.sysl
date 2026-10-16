@@ -521,6 +521,24 @@ the_keycodes_are_the_keys_they_say()
 
     quit()
 
+// SDL's own list of windows, counted: zero before any, one per window open, and back to zero as the
+// last reference goes.
+@test
+window_count_follows_the_open_windows()
+    quit()
+    assert_eq(window_count(), 0, "none before SDL is up")
+    assert(headless(), "SDL_Init")
+    assert_eq(window_count(), 0, "none before the first")
+
+    val a = create_window("a", 32, 32).expect("a dummy window")
+
+    if true
+        val b = create_window("b", 32, 32).expect("a second")
+        assert_eq(window_count(), 2, "two open")
+
+    assert_eq(window_count(), 1, "the second went with its last reference")
+    assert(a.id() != 0u32, "the first is still open")
+
 // ## Events
 
 // An event type that was wrong would simply never match, which no compiler notices. This pushes one
@@ -1627,16 +1645,18 @@ an_unset_hint_is_none_and_takes_the_default()
     assert(get_hint_boolean(name, true), "default true")
     assert(!get_hint_boolean(name, false), "default false")
 
+// A hint of the test's own rather than `HINT_VIDEO_DRIVER`: SDL lets an environment variable of a
+// hint's name override `set_hint`, and the suite is run under `SDL_VIDEODRIVER=dummy`.
 @test
 a_hint_value_outlives_the_next_change()
-    set_hint(HINT_VIDEO_DRIVER, "dummy")
-    val first = get_hint(HINT_VIDEO_DRIVER)
-    set_hint(HINT_VIDEO_DRIVER, "other")
+    val name = "SDL_SYSL_TEST_CHANGING_HINT"
 
-    assert_eq(first, Some("dummy"), "the earlier read was copied")
-    assert_eq(get_hint(HINT_VIDEO_DRIVER), Some("other"), "the new value")
+    assert(set_hint(name, "first"), "set")
+    val first = get_hint(name)
+    assert(set_hint(name, "second"), "set again")
 
-    set_hint(HINT_VIDEO_DRIVER, "dummy")
+    assert_eq(first, Some("first"), "the earlier read was copied")
+    assert_eq(get_hint(name), Some("second"), "the new value")
 
 @test
 the_hint_names_are_the_headers_strings()

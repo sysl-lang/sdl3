@@ -3,11 +3,11 @@
 // This is the block a consumer writes to reach this package:
 //
 //     dependencies {
-//       sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.9" }
+//       sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.10" }
 //     }
 //
 // The coordinate is identity rather than a URL, so it carries no `https://`, and the version is the
-// tag `v0.3.9` on this repository.
+// tag `v0.3.10` on this repository.
 //
 // **SDL3 has to be installed, and so do its headers.** Nothing is vendored here: SDL is a large C
 // project with its own build system and its own platform backends, and a package that carried it
@@ -36,7 +36,7 @@
 
 package {
   name    = "sdl3"
-  version = "0.3.9"
+  version = "0.3.10"
 
   // **The oldest compiler this builds with, and it is a released one.** `system.sysl` splits its two
   // Android primitives with `#if android`, and before 0.0.161 an importer of a module holding an
@@ -81,4 +81,18 @@ requires {
   pkg_config {
     sdl3 = "SDL3 — `brew install sdl3` on macOS, Debian's libsdl3-dev, and pkg-config finds it either way"
   }
+}
+
+// **`kairos` is the one feature, and it is off unless a consumer asks for it**: it brings
+// `sh.sysl.sdl3.pump`, a `Pump` that lets a kairos event loop wait on SDL's event queue and its own
+// timers at once, and with it the `kairos` package. With it off, that module is empty and nothing
+// of kairos is fetched or built. It only adds.
+//
+//     sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.10", features = [kairos] }
+features {
+  kairos = [kairos]
+}
+
+dependencies {
+  kairos { git = "github.com/sysl-lang/kairos", version = "0.1.7", optional = true }
 }

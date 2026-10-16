@@ -503,6 +503,17 @@ create_window(title: string, width: i32, height: i32, flags: u64 = 0) -> Option[
     if w == null then None else Some(Window(w))
 end create_window
 
+// How many windows SDL holds open now, made by this binding or by anyone else in the process. Zero
+// before video is initialised and after the last window has gone.
+window_count() -> int
+    var n: i32 = 0
+    val list = c.get_windows(&n)
+
+    if list != null then c.free(ptr_cast(list))
+
+    int(n)
+end window_count
+
 // Whether this platform has an on-screen keyboard at all. It is a property of the machine rather
 // than of a window, and it is what decides whether a program needs to lay out around one — a desktop
 // answers false and a phone answers true whether or not the keyboard happens to be up.

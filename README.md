@@ -10,7 +10,7 @@ on-screen keyboard, and the lifecycle events an app is stopped and restarted by.
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.9" }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.10" }
 }
 ```
 
@@ -533,6 +533,51 @@ name in `SDL_hints.h` is a `HINT_*` constant, such as `HINT_QUIT_ON_LAST_WINDOW_
 A window is asked to `maximize()`, `minimize()` and `restore()`, and `sync()` waits for the platform
 to act; `is_maximized()` and `is_minimized()` read the state back from `flags()`. Under the dummy
 video driver the requests may be refused, so the tests pin that the readers agree with the flags.
+`window_count()` is how many windows SDL holds open now.
+
+## One loop for SDL and kairos: the `kairos` feature
+
+SDL waits for events in `SDL_WaitEventTimeout`, and a [kairos](https://github.com/sysl-lang/kairos)
+event loop waits for its timers and sources in its driver; each would block the main thread where
+the other cannot see it. With the `kairos` feature on, `sh.sysl.sdl3.pump` is a kairos `Pump` over
+SDL's queue, and `pumped` from `sh.sysl.kairos.pump` composes it with any kairos driver into one wait:
+
+```
+dependencies {
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.10", features = [kairos] }
+  kairos { git = "github.com/sysl-lang/kairos", version = "0.1.7" }
+}
+```
+
+```
+import sh.sysl.kairos.event_loop
+import sh.sysl.kairos.host.host
+import sh.sysl.kairos.pump.pumped
+import sh.sysl.sdl3.Event
+import sh.sysl.sdl3.pump.sdl_pump
+
+val sink: &Fn(Event) -> unit = (e) -> route(e)
+val lp = event_loop(pumped(host(), sdl_pump(sink).expect("on the main thread")))
+```
+
+**Where an event goes is the caller's.** `sdl_pump(sink)` takes a `&Fn(Event) -> unit`, and every
+event the pump takes off SDL's queue goes to it, in order, on the loop's thread. The pump keeps one
+event type for itself — its wake, a user event of a type `register_events` reserved, never
+`EVENT_USER`, so a program's own `user_event` is never mistaken for it — and that one never reaches
+the sink; `wake_type()` names it.
+
+| member | |
+|---|---|
+| `active` | SDL's events subsystem is initialised. Before `init` the loop is its inner driver's alone, so a pump may be made at start-up, before the program knows it will open a window |
+| `wait` | `SDL_WaitEventTimeout`, the timeout rounded up to whole milliseconds and clamped to `i32` (`SDL_WaitEvent` with none), then the queue drained |
+| `poll` | the queue drained, without waiting |
+| `busy` | a window is open, which keeps the loop alive while a task waits for input on it |
+| `waker` | pushes the wake event from any thread, at most one queued however many wakes arrive |
+
+`sdl_pump` answers `Err(PumpError.NotMainThread)` anywhere but the main thread, since SDL's waits
+belong there and the pump's wait runs inside the loop's pass, and `Err(PumpError.NoEventType)` when
+SDL has no user event type left to reserve. With the feature off the module is empty and kairos is
+neither fetched nor built.
 
 ## Audio
 
@@ -578,9 +623,12 @@ run from one.
 sysl test .
 ```
 
-Seventy-two tests, run headless against a real SDL3 — the dummy video and audio drivers create
+Eighty-seven tests, run headless against a real SDL3 — the dummy video and audio drivers create
 windows, renderers, textures and devices and draw into memory, so nothing here needs a display or a
-sound card.
+sound card. `sysl test` on the package turns every feature on; `sysl test --no-default-features .`
+leaves the `kairos` feature off and runs the other seventy-three without fetching kairos. The pump's
+fourteen need only SDL's events subsystem: a wake or an event pushed from a second thread ends a wait with no timeout, a kairos timer
+and an SDL event run in one loop over `pumped(host(), …)`, and the wake never reaches the sink.
 
 **Half of them exist to pin the enumerations.** Every `code` and `of` is a `match` against a name
 the C compiler resolved, so a *typo* is impossible — but that the right variant sits on the right

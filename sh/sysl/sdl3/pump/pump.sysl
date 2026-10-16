@@ -1,0 +1,136 @@
+module sh.sysl.sdl3.pump
+#if feature_kairos
+@requires(posix)
+
+/** SDL's event queue as a kairos `Pump`, so one loop on the main thread waits on SDL and on kairos's
+ * own timers and sources at once:
+ *
+ *     val p = sdl_pump((e) -> route(e)).expect("on the main thread")
+ *     val lp = event_loop(pumped(host(), p))
+ *
+ * Where each event goes is the caller's: the pump hands every one it takes off the queue to the sink
+ * it was made with, in order, on the loop's thread. The one event it keeps for itself is its own
+ * wake, a user event of a type `register_events` reserved for this pump, which never reaches the sink.
+ *
+ * This module exists only when the package's `kairos` feature is on, which is what brings the
+ * `kairos` package.
+ */
+
+import sysl.sync.Atomic
+import sysl.time.{Duration, whole_micros}
+import sh.sysl.kairos.pump.Pump
+import sh.sysl.sdl3.{Event, EventKind, EVENT_USER, INIT_EVENTS, is_main_thread, poll_event, push_event, register_events, user_event_of, wait_event, wait_event_timeout, was_init, window_count}
+
+/** Why `sdl_pump` refused. */
+enum PumpError
+    /** SDL's waits and its video calls belong to the process's main thread, and this is not it. */
+    NotMainThread
+    /** SDL has no user event type left to reserve for the pump's wake. */
+    NoEventType
+
+impl Display for PumpError
+    display(self, out: *Writer, fmt: FormatSpec)
+        val s = self match
+            NotMainThread -> "the SDL pump must be made on the main thread"
+            NoEventType -> "SDL has no user event type left for the pump's wake"
+
+        display_str(s, out, fmt)
+
+// Set while a wake event sits on SDL's queue, so a burst of wakes leaves one there.
+private[pump] struct Flag
+    set: Atomic[u32]
+
+/** A `Pump` over SDL's event queue. `sdl_pump` makes one.
+ *
+ * | member | |
+ * |---|---|
+ * | `active` | SDL's events subsystem is initialised: until then every wait is the inner driver's |
+ * | `wait` | `SDL_WaitEventTimeout`, the timeout in milliseconds rounded up and clamped to `i32`, or `SDL_WaitEvent` with none; then the queue drained |
+ * | `poll` | the queue drained without waiting |
+ * | `busy` | a window is open, which keeps the loop alive while a task awaits input on it |
+ * | `waker` | pushes the pump's own wake event, at most one at a time, from any thread |
+ */
+struct SdlPump
+    private sink: &Fn(Event) -> unit
+    private wake_kind: u32
+    private[pump] pending: &sync Flag
+
+    /** The event type the pump's wake is pushed as: a program that peeks or flushes SDL's queue itself
+     * can tell it apart by this.
+     */
+    wake_type(*self) -> u32 = self.wake_kind
+
+    // Route one event: the pump's own wake is cleared and swallowed, everything else goes to the sink.
+    // The flag is cleared as the wake comes off the queue, so a wake sent after this pushes again.
+    private take(*self, e: Event)
+        if e.kind() == EventKind.Other(self.wake_kind)
+            self.pending.set.store(0)
+        else
+            (self.sink)(e)
+
+    private drain(*self)
+        loop
+            poll_event() match
+                Some(e) -> self.take(e)
+                None -> return
+end SdlPump
+
+impl Pump for SdlPump
+    active(*self) -> bool = was_init(INIT_EVENTS) != 0
+
+    wait(*self, timeout: Option[Duration])
+        val got = timeout match
+            Some(d) -> wait_event_timeout(millis_up(d))
+            None -> wait_event()
+
+        got match
+            Some(e) -> self.take(e)
+            None -> ()
+
+        self.drain()
+    end wait
+
+    poll(*self) = self.drain()
+
+    override busy(*self) -> bool = window_count() > 0
+
+    waker(*self) -> &sync Fn() -> unit
+        val f = self.pending
+        val kind = self.wake_kind
+
+        () -> if f.set.swap(1) == 0 then push_event(user_event_of(kind, 0))
+end SdlPump
+
+/** An SDL pump whose events go to `sink`. It may be made before SDL is initialised — it is inactive
+ * until the events subsystem is up — but only on the main thread, since every wait it does runs on
+ * the thread that runs the loop. It reserves one user event type for its wake.
+ */
+sdl_pump(sink: &Fn(Event) -> unit) -> Result[&SdlPump, PumpError]
+    if !is_main_thread() then return Err(PumpError.NotMainThread)
+
+    // SDL hands out registered types from `EVENT_USER` itself upward, so the first range a process
+    // reserves is the very type `user_event` pushes. A pump that took it would swallow the program's
+    // own user events as its wake, so that one is passed over.
+    var kind = register_events(1)
+
+    if kind == Some(EVENT_USER) then kind = register_events(1)
+
+    kind match
+        Some(k) -> Ok(SdlPump(sink, k, Flag(Atomic(0))))
+        None -> Err(PumpError.NoEventType)
+end sdl_pump
+
+/** A timeout as SDL's milliseconds: rounded up, so a wait never ends before it; never negative; and
+ * clamped to what an `i32` holds.
+ */
+private[pump] millis_up(d: Duration) -> i32
+    val us = whole_micros(d)
+
+    if us <= 0 then return 0
+
+    val ms = (us + 999) / 1000
+
+    if ms > 2147483647 then 2147483647 else i32(ms)
+end millis_up
+
+#endif

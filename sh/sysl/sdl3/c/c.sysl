@@ -287,6 +287,7 @@ extern "SDL_IsMainThread" is_main_thread() -> bool
 
 extern "SDL_CreateWindow" create_window(title: *u8, w: i32, h: i32, flags: u64) -> *Window
 extern "SDL_DestroyWindow" destroy_window(window: *Window)
+extern "SDL_GetWindows" get_windows(count: *i32) -> **Window
 extern "SDL_SetWindowPosition" set_window_position(window: *Window, x: i32, y: i32) -> bool
 extern "SDL_GetWindowPosition" get_window_position(window: *Window, x: *i32, y: *i32) -> bool
 extern "SDL_SetWindowSize" set_window_size(window: *Window, w: i32, h: i32) -> bool

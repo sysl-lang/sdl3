@@ -1,0 +1,355 @@
+module sh.sysl.sdl3.pump
+#if feature_kairos
+@requires(posix)
+@tests
+
+// The pump's own tests. They need only SDL's events subsystem, so they run headless; the one that
+// opens a window sets the dummy video driver first, as the package's other tests do.
+
+import sysl.buf.{Buf, buf}
+import sysl.sync.Atomic
+import sysl.threads.spawn
+import sysl.time.{Duration, millis, micros, whole_micros}
+import sysl.posix.time.{monotonic, sleep}
+import sh.sysl.kairos.event_loop
+import sh.sysl.kairos.host.host
+import sh.sysl.kairos.pump.{Pump, pumped}
+import sh.sysl.sdl3.{Event, EventKind, EVENT_USER, HINT_VIDEO_DRIVER, INIT_EVENTS, INIT_VIDEO, create_window, init, poll_event, push_event, quit, set_hint, user_event, window_count}
+
+private ms_since(t: Duration) -> long = whole_micros(monotonic() - t) / 1000
+
+// Bring up only the events subsystem, from nothing.
+private events_only()
+    quit()
+    assert(init(INIT_EVENTS), "SDL_Init(INIT_EVENTS)")
+
+// The user codes a sink saw, in order.
+private struct Seen
+    codes: Buf[i32]
+    others: int
+
+private seen() -> &Seen = Seen(buf(), 0)
+
+private recorder(s: &Seen) -> &Fn(Event) -> unit = (e) ->
+    if e.kind() == EventKind.User then s.codes.push(e.user_code()) else s.others += 1
+
+// Throw away whatever an earlier test left on the queue.
+private empty_queue()
+    loop
+        if poll_event().is_none() then return
+
+// What a second thread does after `delay_ms`: push a user event carrying `code` when it is not
+// negative, then call `wake` that many times.
+private struct Later
+    delay_ms: long
+    code: i32
+    wake: &sync Fn() -> unit
+    wakes: int
+
+private later(s: *Later) -> unit
+    sleep(millis(s.delay_ms))
+    if s.code >= 0 then push_event(user_event(s.code))
+    for _ in 0..<s.wakes
+        (s.wake)()
+
+// ## Rounding the timeout
+
+@test("a timeout is SDL's milliseconds rounded up, never negative, and clamped to an i32")
+a_timeout_rounds_up_and_clamps()
+    assert_eq(millis_up(micros(0)), 0i32)
+    assert_eq(millis_up(micros(1)), 1i32, "a microsecond waits a whole millisecond, not none")
+    assert_eq(millis_up(micros(1000)), 1i32)
+    assert_eq(millis_up(micros(1001)), 2i32)
+    assert_eq(millis_up(millis(30)), 30i32)
+    assert_eq(millis_up(micros(-5000)), 0i32, "a deadline already past waits not at all")
+    assert_eq(millis_up(millis(3000000000)), 2147483647i32, "a month is as long as SDL can wait")
+
+// ## Making one
+
+@test("made on the main thread, the pump reserves a wake type of its own, distinct per pump")
+made_on_the_main_thread()
+    events_only()
+
+    val s = seen()
+    val a = sdl_pump(recorder(s)).expect("the test runs on the main thread")
+    val b = sdl_pump(recorder(s)).expect("and a second pump")
+
+    assert(a.wake_type() != b.wake_type(), "each pump has its own wake type")
+    assert(a.wake_type() > EVENT_USER, "in SDL's user range, and never the type user_event pushes")
+    assert(b.wake_type() > EVENT_USER, "the second neither")
+    quit()
+
+private struct Refused
+    answer: int
+
+// 0: refused as not on the main thread; 1: made; 2: refused for another reason.
+private off_main(r: *Refused) -> unit
+    r.answer = sdl_pump((e) -> ()) match
+        Err(PumpError.NotMainThread) -> 0
+        Ok(_) -> 1
+        Err(_) -> 2
+
+@test("made on any other thread, the pump is refused")
+refused_off_the_main_thread()
+    events_only()
+
+    var r = Refused(-1)
+    val t = spawn(&off_main, &r).unwrap()
+
+    assert(t.join())
+    assert_eq(r.answer, 0, "NotMainThread")
+    assert_eq(s"${PumpError.NotMainThread}", "the SDL pump must be made on the main thread")
+    quit()
+
+// ## Active and busy
+
+@test("the pump is active exactly while SDL's events subsystem is up")
+active_follows_the_events_subsystem()
+    quit()
+
+    val p = sdl_pump((e) -> ()).expect("made before SDL is up")
+
+    assert(!p.active(), "inactive before SDL_Init")
+    assert(init(INIT_EVENTS), "SDL_Init(INIT_EVENTS)")
+    assert(p.active(), "active once events are up")
+    quit()
+    assert(!p.active(), "inactive again after SDL_Quit")
+
+@test("the pump is busy exactly while a window is open")
+busy_while_a_window_is_open()
+    quit()
+    set_hint(HINT_VIDEO_DRIVER, "dummy")
+    assert(init(INIT_VIDEO), "SDL_Init(INIT_VIDEO), headless")
+
+    val p = sdl_pump((e) -> ()).expect("main thread")
+
+    assert(!p.busy(), "no window yet")
+    assert_eq(window_count(), 0)
+
+    if true
+        val w = create_window("pump", 64, 48).expect("a dummy window")
+        assert(p.busy(), "a window is open")
+        assert_eq(window_count(), 1)
+
+    assert(!p.busy(), "the window went with its last reference")
+    assert_eq(window_count(), 0)
+    quit()
+    assert_eq(window_count(), 0, "and none once SDL is down")
+
+// ## Waiting and draining
+
+@test("poll hands every pending event to the sink in order, without waiting")
+poll_drains_in_order()
+    events_only()
+    empty_queue()
+
+    val s = seen()
+    val p = sdl_pump(recorder(s)).expect("main thread")
+
+    assert(push_event(user_event(1)) && push_event(user_event(2)) && push_event(user_event(3)), "pushed")
+
+    val started = monotonic()
+
+    p.poll()
+    assert(ms_since(started) < 500, "poll does not wait")
+    assert_eq(s.codes.len(), 3)
+    assert_eq(s.codes[0], 1i32)
+    assert_eq(s.codes[1], 2i32)
+    assert_eq(s.codes[2], 3i32)
+
+    p.poll()
+    assert_eq(s.codes.len(), 3, "an empty queue gives the sink nothing")
+    quit()
+
+@test("a wait with a timeout and nothing to wake it lasts the timeout and gives the sink nothing")
+a_quiet_wait_lasts_the_timeout()
+    events_only()
+    empty_queue()
+
+    val s = seen()
+    val p = sdl_pump(recorder(s)).expect("main thread")
+    val started = monotonic()
+
+    p.wait(Some(millis(40)))
+
+    val took = ms_since(started)
+
+    assert(took >= 39, s"no sooner than the timeout: $took ms")
+    assert(took < 1000, s"not much later: $took ms")
+    assert_eq(s.codes.len(), 0)
+    assert_eq(s.others, 0)
+    quit()
+
+@test("a wait with no timeout ends on an event pushed from another thread, and the sink has it")
+an_event_from_another_thread_ends_a_wait()
+    events_only()
+    empty_queue()
+
+    val s = seen()
+    val p = sdl_pump(recorder(s)).expect("main thread")
+    var job = Later(30, 99, () -> (), 0)
+    val started = monotonic()
+    val t = spawn(&later, &job).unwrap()
+
+    p.wait(None)
+
+    val took = ms_since(started)
+
+    assert(t.join())
+    assert(took >= 25 && took < 1000, s"ended by the event: $took ms")
+    assert_eq(s.codes.len(), 1)
+    assert_eq(s.codes[0], 99i32)
+    quit()
+
+@test("the waker ends a wait with no timeout from another thread, and the wake never reaches the sink")
+the_waker_ends_a_wait()
+    events_only()
+    empty_queue()
+
+    val s = seen()
+    val p = sdl_pump(recorder(s)).expect("main thread")
+    var job = Later(30, -1, p.waker(), 1)
+    val started = monotonic()
+    val t = spawn(&later, &job).unwrap()
+
+    p.wait(None)
+
+    val took = ms_since(started)
+
+    assert(t.join())
+    assert(took >= 25 && took < 1000, s"ended by the wake: $took ms")
+    assert_eq(s.codes.len(), 0, "the wake is the pump's own")
+    assert_eq(s.others, 0, "and not passed on as any other kind either")
+    quit()
+
+@test("a burst of wakes leaves one wake event on the queue, and a wake after it is taken pushes again")
+wakes_coalesce()
+    events_only()
+    empty_queue()
+
+    val s = seen()
+    val p = sdl_pump(recorder(s)).expect("main thread")
+    val wake = p.waker()
+
+    for _ in 0..<5
+        wake()
+
+    var queued = 0
+
+    loop
+        poll_event() match
+            Some(e) -> if e.kind() == EventKind.Other(p.wake_type()) then queued += 1
+            None -> break
+
+    assert_eq(queued, 1, "five wakes, one event")
+
+    // That event was taken by the test rather than the pump, so the pump still thinks one is queued;
+    // a wake the pump itself takes clears it.
+    p.pending.set.store(0)
+    wake()
+    p.poll()
+    wake()
+    assert(push_event(user_event(7)), "pushed")
+    p.poll()
+    assert_eq(s.codes.len(), 1, "only the program's own event reached the sink")
+    assert_eq(s.codes[0], 7i32)
+
+    wake()
+    queued = 0
+
+    loop
+        poll_event() match
+            Some(e) -> if e.kind() == EventKind.Other(p.wake_type()) then queued += 1
+            None -> break
+
+    assert_eq(queued, 1, "after the pump took its wake, the next wake pushed a fresh one")
+    quit()
+end wakes_coalesce
+
+@test("another pump's wake type is an ordinary event to this one")
+another_pumps_wake_reaches_the_sink()
+    events_only()
+    empty_queue()
+
+    val s = seen()
+    val p = sdl_pump(recorder(s)).expect("main thread")
+    val q = sdl_pump((e) -> ()).expect("main thread")
+
+    q.waker()()
+    p.poll()
+    assert_eq(s.others, 1, "q's wake is not p's to swallow")
+    quit()
+
+// ## Under a kairos loop
+
+@test("pumped(host(), sdl_pump) runs a kairos timer and an SDL event from another thread, each on time")
+a_timer_and_an_sdl_event_in_one_loop()
+    events_only()
+    empty_queue()
+
+    val log: &Buf[string] = buf()
+    val sink: &Fn(Event) -> unit = (e) ->
+        if e.kind() == EventKind.User then log.push(s"sdl ${e.user_code()} at ${elapsed_ms()}")
+    val p = sdl_pump(sink).expect("main thread")
+    val lp = event_loop(pumped(host(), p))
+
+    start.store(whole_micros(monotonic()))
+    lp.after(millis(80), (l) -> log.push(s"timer at ${elapsed_ms()}"))
+
+    var job = Later(30, 5, () -> (), 0)
+    val t = spawn(&later, &job).unwrap()
+
+    lp.run()
+
+    val took = elapsed_ms()
+
+    assert(t.join())
+    assert_eq(log.len(), 2, s"both arrived: $log")
+    assert(log[0].starts_with("sdl 5 at "), s"the SDL event first: ${log[0]}")
+    assert(log[1].starts_with("timer at "), s"then the timer: ${log[1]}")
+    assert(took >= 79 && took < 1000, s"the loop ended with its timer: $took ms")
+    quit()
+end a_timer_and_an_sdl_event_in_one_loop
+
+private var start: Atomic[long] = Atomic(0)
+
+private elapsed_ms() -> long = (whole_micros(monotonic()) - start.load()) / 1000
+
+@test("the composed driver's waker ends a pump wait with no limit, and the sink sees nothing")
+the_composed_waker_ends_a_pumped_wait()
+    events_only()
+    empty_queue()
+
+    val s = seen()
+    val p = sdl_pump(recorder(s)).expect("main thread")
+    val d = pumped(host(), p)
+    var job = Later(30, -1, d.waker(), 3)
+    val started = monotonic()
+    val t = spawn(&later, &job).unwrap()
+
+    d.idle_until(None)
+
+    val took = ms_since(started)
+
+    assert(t.join())
+    assert(took >= 25 && took < 1000, s"ended by the wake: $took ms")
+    assert_eq(s.codes.len(), 0)
+    assert_eq(s.others, 0)
+    quit()
+
+@test("before SDL is up the pump is inactive, and the loop runs on the inner driver alone")
+an_inactive_pump_leaves_the_loop_to_its_driver()
+    quit()
+
+    val s = seen()
+    val p = sdl_pump(recorder(s)).expect("main thread")
+    val lp = event_loop(pumped(host(), p))
+    val fired: &Buf[int] = buf()
+
+    lp.after(millis(20), (l) -> fired.push(1))
+    lp.run()
+
+    assert_eq(fired.len(), 1, "the timer ran over host() alone")
+    assert_eq(s.codes.len(), 0)
+
+#endif
