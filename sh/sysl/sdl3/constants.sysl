@@ -29,7 +29,7 @@
 // it would have compared against is the number that was wrong.
 //
 // **SDL's headers are not on the toolchain's default search path**, so a consumer passes
-// `--include-path` beside the `--link-path` this package already needs. `package.hocon` declares
+// `--include-path` beside the `--link-path` this package already needs. `sysl.hocon` declares
 // that requirement, which is what turns a missing header into a sentence naming this package rather
 // than a clang error naming a file nobody wrote.
 

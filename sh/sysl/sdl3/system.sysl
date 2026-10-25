@@ -1,6 +1,7 @@
 module sh.sysl.sdl3
 
 import sh.sysl.sdl3.c
+import sysl.raw.ptr_cast
 import sysl.text.cstring
 
 // The screensaver, and the two calls SDL offers only on Android.

@@ -10,7 +10,7 @@ on-screen keyboard, and the lifecycle events an app is stopped and restarted by.
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.10" }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.11" }
 }
 ```
 
@@ -88,8 +88,8 @@ the same pointer, and satisfies both names everywhere — so this costs nothing 
 package's tests check it by handing a value built above to a declaration written below. `rect`,
 `frect` and `fpoint` still build one without naming the type at all, which covers most uses.
 
-This needs sysl **0.0.67**, the release a transparent alias over a struct arrived in; the package's
-floor in `package.hocon` is higher, **0.0.161**, for the `#if android` in `system.sysl`.
+This needs sysl **0.6.0**, the floor in `sysl.hocon`: the raw-form imports and the `sysl.hocon`
+manifest name arrived with it. The 0.5.x line stays on v0.3.10.
 
 **`Surface` is the one name deliberately not aliased.** `sh.sysl.sdl3` already declares an owning
 `Surface` that frees what it points at when the last reference goes; SDL's raw `SDL_Surface` is a
@@ -130,7 +130,7 @@ you name:
 sysl run prog.sysl
 ```
 
-`package.hocon` declares `requires { pkg_config { sdl3 = … } }`, so the compiler asks pkg-config for
+`sysl.hocon` declares `requires { pkg_config { sdl3 = … } }`, so the compiler asks pkg-config for
 both ends at once. Without SDL3 installed the refusal names SDL3 and says how to install it, rather
 than clang reporting a file the caller never wrote.
 
@@ -139,7 +139,7 @@ directory *above* `SDL3` — which is exactly the sort of thing pkg-config knows
 not have to.
 
 **The prefix still cannot live in this file**, and that has not changed: `design/15 §8` refuses both a
-`@link_path` attribute and a `package.hocon` field for one, because where a prefix lives is a fact
+`@link_path` attribute and a `sysl.hocon` field for one, because where a prefix lives is a fact
 about somebody's laptop rather than a property of the package. What changed is who answers the
 question. `--include-path sdl3=<dir>` and `--link-path <dir>` still answer it and take precedence, and
 `LIBRARY_PATH` and `CPATH` work too since clang reads them. **Needs sysl 0.0.56.**
@@ -544,7 +544,7 @@ SDL's queue, and `pumped` from `sh.sysl.kairos.pump` composes it with any kairos
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.10", features = [kairos] }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.11", features = [kairos] }
   kairos { git = "github.com/sysl-lang/kairos", version = "0.1.7" }
 }
 ```

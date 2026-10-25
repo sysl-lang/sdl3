@@ -3,11 +3,11 @@
 // This is the block a consumer writes to reach this package:
 //
 //     dependencies {
-//       sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.10" }
+//       sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.11" }
 //     }
 //
 // The coordinate is identity rather than a URL, so it carries no `https://`, and the version is the
-// tag `v0.3.10` on this repository.
+// tag `v0.3.11` on this repository.
 //
 // **SDL3 has to be installed, and so do its headers.** Nothing is vendored here: SDL is a large C
 // project with its own build system and its own platform backends, and a package that carried it
@@ -23,7 +23,7 @@
 //
 // The headers are read because `sh.sysl.sdl3.c` asks the C compiler for SDL's own constants rather
 // than transcribing them. That is deliberate and is not a gap: `15 §8` refuses both a `@link_path`
-// attribute and a `package.hocon` field for a prefix, because where one lives is a fact about
+// attribute and a `sysl.hocon` field for a prefix, because where one lives is a fact about
 // somebody's laptop rather than a property of the package. `LIBRARY_PATH` and `CPATH` work too,
 // since clang reads them, and are the better answer on a machine where the setting never changes.
 //
@@ -36,14 +36,12 @@
 
 package {
   name    = "sdl3"
-  version = "0.3.10"
+  version = "0.3.11"
 
-  // **The oldest compiler this builds with, and it is a released one.** `system.sysl` splits its two
-  // Android primitives with `#if android`, and before 0.0.161 an importer of a module holding an
-  // `#if` saw none of that module's declarations. An older compiler would build this package's own
-  // tests and then fail every consumer, so the floor is here rather than left to a reader to work
-  // out from an unknown name.
-  sysl = "0.0.161"
+  // **The oldest compiler this builds with, and it is a released one.** The raw-form imports
+  // (`sysl.raw.ptr_cast`) and the manifest's `sysl.hocon` name do not exist before 0.6.0, so an
+  // older compiler could not read this package at all.
+  sysl = "0.6.0"
 }
 
 // **`posix`, because SDL is a hosted library.** It opens devices, starts threads, talks to a window
@@ -88,11 +86,11 @@ requires {
 // timers at once, and with it the `kairos` package. With it off, that module is empty and nothing
 // of kairos is fetched or built. It only adds.
 //
-//     sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.10", features = [kairos] }
+//     sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.11", features = [kairos] }
 features {
   kairos = [kairos]
 }
 
 dependencies {
-  kairos { git = "github.com/sysl-lang/kairos", version = "0.1.7", optional = true }
+  kairos { git = "github.com/sysl-lang/kairos", version = "0.1.13", optional = true }
 }

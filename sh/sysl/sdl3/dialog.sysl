@@ -1,6 +1,7 @@
 module sh.sysl.sdl3
 
 import sh.sysl.sdl3.c
+import sysl.raw.ptr_cast
 import sysl.text.{CString, cstring, from_cstring}
 import sysl.slices.as_ptr
 import sysl.buf.{Buf, buf}

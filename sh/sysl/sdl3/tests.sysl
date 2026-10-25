@@ -2,6 +2,7 @@ module sh.sysl.sdl3
 @tests
 
 import sh.sysl.sdl3.c
+import sysl.raw.ptr_cast
 import sysl.text.{cstring, from_cstring}
 import sysl.buf.{Buf, buf}
 import sysl.text.Search

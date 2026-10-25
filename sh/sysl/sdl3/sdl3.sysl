@@ -9,7 +9,7 @@ import sysl.text.{cstring, from_cstring}
 // linenoise, monocypher or qcbor, whose sources are vendored so that nothing has to be installed,
 // SDL is a large C project with its own build system and its own platform backends; a package
 // carrying it would be maintaining a port. So SDL3 is installed separately and the two flags naming
-// its prefix are part of every build here — `package.hocon` says why that is deliberate.
+// its prefix are part of every build here — `sysl.hocon` says why that is deliberate.
 //
 // **It is two layers.** `sh.sysl.sdl3.c` holds the link directive, the opaque handles and the
 // hundred and thirty declarations. This module is what an application imports, and its job is to be
