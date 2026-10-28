@@ -16,6 +16,21 @@ import sysl.text.cstring
 // without calling anything, and a program that runs in both places calls them unconditionally. What
 // differs is two primitives, `posted` and `asked`, split by the `#if android` below.
 
+// The wall clock as SDL counts it: nanoseconds since the Unix epoch, UTC. Nothing when the platform
+// has no clock to read.
+current_time() -> Option[i64]
+    var ticks: i64 = 0
+
+    if c.get_current_time(&ticks) then Some(ticks) else None
+end current_time
+
+// Break a `current_time` value into a calendar date, in the local time zone or in UTC.
+date_time(ticks: i64, local: bool = false) -> Option[DateTime]
+    var dt = DateTime(0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+    if c.time_to_date_time(ticks, &dt, local) then Some(dt) else None
+end date_time
+
 // Let the display sleep again — the system's own timeout applies.
 enable_screen_saver() -> bool = c.enable_screen_saver()
 

@@ -10,7 +10,7 @@ on-screen keyboard, and the lifecycle events an app is stopped and restarted by.
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.11" }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.12" }
 }
 ```
 
@@ -88,7 +88,7 @@ the same pointer, and satisfies both names everywhere — so this costs nothing 
 package's tests check it by handing a value built above to a declaration written below. `rect`,
 `frect` and `fpoint` still build one without naming the type at all, which covers most uses.
 
-This needs sysl **0.6.0**, the floor in `sysl.hocon`: the raw-form imports and the `sysl.hocon`
+This needs sysl **0.7.7**, the floor in `sysl.hocon`: the raw-form imports and the `sysl.hocon`
 manifest name arrived with it. The 0.5.x line stays on v0.3.10.
 
 **`Surface` is the one name deliberately not aliased.** `sh.sysl.sdl3` already declares an owning
@@ -544,7 +544,7 @@ SDL's queue, and `pumped` from `sh.sysl.kairos.pump` composes it with any kairos
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.11", features = [kairos] }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.12", features = [kairos] }
   kairos { git = "github.com/sysl-lang/kairos", version = "0.1.7" }
 }
 ```

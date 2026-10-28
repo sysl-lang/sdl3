@@ -37,5 +37,8 @@ type Vertex = c.Vertex
 // `SDL_AudioSpec` — sample format, channel count and rate.
 type AudioSpec = c.AudioSpec
 
+// `SDL_DateTime` — a calendar date and time of day, with the offset from UTC in seconds.
+type DateTime = c.DateTime
+
 // `SDL_DialogFileFilter` — a description and a pattern, for the file dialogs in `dialog.sysl`.
 type DialogFileFilter = c.DialogFileFilter

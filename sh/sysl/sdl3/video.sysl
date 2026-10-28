@@ -504,6 +504,13 @@ create_window(title: string, width: i32, height: i32, flags: u64 = 0) -> Option[
     if w == null then None else Some(Window(w))
 end create_window
 
+// Whether a window with this id is open, the id an event's `window_id` carries. The binding does
+// not hand the window itself back: a `Window` owns what it points at and destroys it when its last
+// reference goes, so a second one over a window somebody else owns would destroy it twice. A program
+// that needs the window keeps the `&Window` it made; one that only holds an id, from a touch or a
+// native event, reads its size and scale through `c.get_window_from_id`.
+window_exists(id: u32) -> bool = c.get_window_from_id(id) != null
+
 // How many windows SDL holds open now, made by this binding or by anyone else in the process. Zero
 // before video is initialised and after the last window has gone.
 window_count() -> int

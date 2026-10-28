@@ -1728,3 +1728,60 @@ debug_text_draws_where_it_is_told()
     assert_eq(shot.read_pixel(1, 1).expect("a pixel").r, 0u8, "and left the background alone")
 
     quit()
+
+// ## Lookup by id, the audio driver's name, and the wall clock
+
+@test
+a_window_is_found_by_its_id()
+    assert(headless(), "video came up")
+
+    val w = create_window("by id", 32, 32).expect("a dummy window")
+    val id = w.id()
+
+    assert(window_exists(id), "an open window's id is found")
+    assert(c.get_window_from_id(id) == w.handle, "and it is the same window")
+
+    var cw: i32 = 0
+    var ch: i32 = 0
+
+    assert(c.get_window_size(c.get_window_from_id(id), &cw, &ch), "its size reads through the id")
+    assert_eq(cw, 32i32, "the width")
+    assert_eq(ch, 32i32, "the height")
+    assert(!window_exists(id + 1000u32), "an id nobody has is not found")
+    assert(c.get_window_from_id(id + 1000u32) == null, "and the raw call answers null")
+
+    quit()
+
+@test
+the_audio_driver_is_named_once_audio_is_up()
+    set_hint("SDL_AUDIO_DRIVER", "dummy")
+
+    assert(init_audio(), "the audio subsystem came up")
+    assert_eq(current_audio_driver().expect("a driver"), "dummy", "the driver the hint chose")
+
+    quit_audio()
+
+    assert(current_audio_driver().is_none(), "and nothing once it is down")
+
+@test
+the_wall_clock_breaks_into_a_date()
+    assert_eq(sizeof(c.DateTime), 36usize, "SDL_DateTime is nine 32-bit fields")
+
+    val epoch = date_time(0i64).expect("the epoch")
+
+    assert_eq(epoch.year, 1970i32, "the epoch's year")
+    assert_eq(epoch.month, 1i32, "month")
+    assert_eq(epoch.day, 1i32, "day")
+    assert_eq(epoch.hour, 0i32, "hour")
+    assert_eq(epoch.day_of_week, 4i32, "a Thursday, counting from Sunday as 0")
+
+    val day = date_time(86400i64 * 1000000000i64 * 365i64 + 3661i64 * 1000000000i64).expect("a date")
+
+    assert_eq(day.year, 1971i32, "a year on")
+    assert_eq(day.hour, 1i32, "the hour")
+    assert_eq(day.minute, 1i32, "the minute")
+    assert_eq(day.second, 1i32, "the second")
+
+    val now = current_time().expect("the clock")
+
+    assert(now > 1700000000i64 * 1000000000i64, "the clock reads after late 2023")

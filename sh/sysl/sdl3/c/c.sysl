@@ -92,6 +92,18 @@ struct AudioSpec
     channels: i32
     freq: i32
 
+// `SDL_DateTime` — nine contiguous 32-bit fields.
+struct DateTime
+    year: i32
+    month: i32
+    day: i32
+    hour: i32
+    minute: i32
+    second: i32
+    nanosecond: i32
+    day_of_week: i32
+    utc_offset: i32
+
 // `SDL_Locale` — two C strings, the second of which is null when the platform names no region.
 struct Locale
     language: *u8
@@ -274,7 +286,9 @@ extern "SDL_DelayNS" delay_ns(ns: u64)
 extern "SDL_DelayPrecise" delay_precise(ns: u64)
 extern "SDL_GetTicks" get_ticks() -> u64
 extern "SDL_GetTicksNS" get_ticks_ns() -> u64
-extern "SDL_GetPerformanceCounter" get_performance_counter() -> u64
+extern "SDL_GetCurrentTime" get_current_time(ticks: *i64) -> bool
+extern "SDL_TimeToDateTime" time_to_date_time(ticks: i64, dt: *DateTime, local_time: bool) -> bool
+extern "SDL_GetPerformanceCounter"get_performance_counter() -> u64
 extern "SDL_GetPerformanceFrequency" get_performance_frequency() -> u64
 
 extern "SDL_SetHint" set_hint(name: *u8, value: *u8) -> bool
@@ -307,6 +321,7 @@ extern "SDL_MinimizeWindow" minimize_window(window: *Window) -> bool
 extern "SDL_RestoreWindow" restore_window(window: *Window) -> bool
 extern "SDL_SyncWindow" sync_window(window: *Window) -> bool
 extern "SDL_GetWindowID" get_window_id(window: *Window) -> u32
+extern "SDL_GetWindowFromID" get_window_from_id(id: u32) -> *Window
 extern "SDL_StartTextInput" start_text_input(window: *Window) -> bool
 extern "SDL_StartTextInputWithProperties" start_text_input_with_properties(window: *Window,
                                                                           props: u32) -> bool
@@ -447,6 +462,7 @@ extern "SDL_CursorVisible" cursor_visible() -> bool
 
 // ## Audio
 
+extern "SDL_GetCurrentAudioDriver" get_current_audio_driver() -> *u8
 extern "SDL_OpenAudioDeviceStream" open_audio_device_stream(devid: u32, spec: *AudioSpec,
                                                             callback: *u8, userdata: *u8) -> *AudioStream
 extern "SDL_ResumeAudioStreamDevice" resume_audio_stream_device(stream: *AudioStream) -> bool

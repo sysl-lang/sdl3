@@ -132,6 +132,14 @@ end AudioStream
 impl Drop for AudioStream
     drop(self) = c.destroy_audio_stream(self.handle)
 
+// The name of the audio driver SDL chose ("coreaudio", "dummy"), or nothing before the audio
+// subsystem is up.
+current_audio_driver() -> Option[string]
+    val name = c.get_current_audio_driver()
+
+    if name == null then None else from_cstring(name).ok()
+end current_audio_driver
+
 // Bring up the audio subsystem. Independent of video, so a program may open its window first and
 // decide about sound afterwards.
 init_audio() -> bool = init_subsystem(INIT_AUDIO)
