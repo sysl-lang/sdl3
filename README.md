@@ -664,7 +664,7 @@ cmd.submit()
 sysl test .
 ```
 
-Eighty-seven tests, run headless against a real SDL3 — the dummy video and audio drivers create
+Ninety tests, run headless against a real SDL3 — the dummy video and audio drivers create
 windows, renderers, textures and devices and draw into memory, so nothing here needs a display or a
 sound card. `sysl test` on the package turns every feature on; `sysl test --no-default-features .`
 leaves the `kairos` feature off and runs the other seventy-three without fetching kairos. The pump's
