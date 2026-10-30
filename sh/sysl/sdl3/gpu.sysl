@@ -1,0 +1,542 @@
+module sh.sysl.sdl3
+
+import sh.sysl.sdl3.c
+import sysl.slices.as_ptr
+import sysl.raw.ptr_cast
+import sysl.text.{cstring, from_cstring}
+
+// SDL_GPU — the GPU API, enough of it to draw a 3D viewport.
+//
+// **A device owns nothing it cannot be asked about, and everything made from it holds the device.**
+// Every resource carries an `&GpuDevice`, so the device is destroyed after the last texture, buffer
+// and pipeline made from it and never before — destroying the device first leaves SDL releasing into
+// a dead object, and the order is the sort of thing a binding is for. The device itself is destroyed
+// when its last reference goes.
+//
+// **A creation failure is an `Err` carrying SDL's own message**, `Result[&T, string]`, unlike the rest
+// of this package, whose calls answer `bool` and leave the reason in `error()`: here a null is the
+// only signal, the reason is the only thing worth having, and a `Result` is the shape that cannot be
+// ignored. A create-info struct is C's, in `c`; the helpers below build the ones that are awkward to
+// spell by position.
+//
+// **Command buffers, passes and the swapchain texture are not `&` handles.** A command buffer is
+// consumed by `submit`, a pass by `end`, and a swapchain texture belongs to its window; none is
+// ever freed by this side. `GpuTexture.owned` is what tells a swapchain texture from a made one.
+//
+// **A GPU device needs no window**, and creating one does not open any. Only claiming a window for
+// presentation, and the GPU renderer, need one.
+
+// ## Why a creation failed
+//
+// A driver reports a shader or pipeline failure through SDL's log, not through `SDL_GetError`, so
+// the error string is empty exactly when the reason is the interesting part. Around each creation
+// call SDL's log output is pointed at `log_capture`, which keeps what was logged, and put back
+// afterwards; `failure()` answers SDL's error where it has one and the captured log where it does
+// not. **This is process-wide state, so creation calls are for one thread at a time**, which SDL_GPU
+// asks of device creation in any case.
+
+private var captured: string = ""
+private var saved_output: *extern(*u8, i32, i32, *u8) -> unit = null
+private var saved_userdata: *u8 = null
+
+private log_capture(ud: *u8, category: i32, priority: i32, message: *u8)
+    val line = from_cstring(message).unwrap_or("")
+
+    captured = if captured == "" then line else captured + "\n" + line
+
+private begin_capture()
+    captured = ""
+    c.get_log_output_function(&saved_output, &saved_userdata)
+    c.set_log_output_function(&log_capture, null)
+
+private end_capture() = c.set_log_output_function(saved_output, saved_userdata)
+
+// SDL's reason for the failure that just happened.
+private failure() -> string
+    val e = error()
+
+    if e != "" then e else if captured != "" then captured else "SDL gave no reason"
+end failure
+
+// A GPU device.
+struct GpuDevice
+    handle: *c.GPUDevice
+    owned: bool
+
+    // The name of the driver in use: `"metal"`, `"vulkan"`, `"direct3d12"`.
+    driver(&self) -> string = from_cstring(c.get_gpu_device_driver(self.handle)).unwrap_or("")
+
+    // The shader formats this device accepts, as a set of `GPU_SHADERFORMAT_*`.
+    shader_formats(&self) -> u32 = c.get_gpu_shader_formats(self.handle)
+
+    // Create a shader. `code` is source text for a format that takes text (`GPU_SHADERFORMAT_MSL`);
+    // `shader_binary` takes bytes. The counts are the numbers of each resource the shader declares,
+    // and a count that disagrees with the shader is a failure at pipeline creation, not here.
+    shader(&self, code: string, format: u32, stage: i32, entry: string, samplers: u32 = 0,
+            uniform_buffers: u32 = 0, storage_textures: u32 = 0, storage_buffers: u32 = 0
+            ) -> Result[&GpuShader, string]
+        val text = cstring(code)
+        val e = cstring(entry)
+        var info = c.GPUShaderCreateInfo(usize(code.len), text.ptr, e.ptr, format, stage, samplers,
+                storage_textures, storage_buffers, uniform_buffers, 0)
+
+        self.make_shader(&info)
+    end shader
+
+    // The creation both shader forms share. A format the device does not take is refused here: SDL
+    // asserts on it, which stops a debug build of SDL at a prompt rather than returning.
+    private make_shader(&self, info: *c.GPUShaderCreateInfo) -> Result[&GpuShader, string]
+        if (info[0].format & self.shader_formats()) == 0 then
+            return Err("this device does not take shaders in that format")
+
+        begin_capture()
+
+        val h = c.create_gpu_shader(self.handle, info)
+
+        end_capture()
+        if h == null then Err(failure()) else Ok(GpuShader(self, h))
+    end make_shader
+
+    shader_binary(&self, code: []const u8, format: u32, stage: i32, entry: string, samplers: u32 = 0,
+            uniform_buffers: u32 = 0, storage_textures: u32 = 0, storage_buffers: u32 = 0
+            ) -> Result[&GpuShader, string]
+        val e = cstring(entry)
+        var info = c.GPUShaderCreateInfo(usize(code.len), as_ptr(code), e.ptr, format, stage, samplers,
+                storage_textures, storage_buffers, uniform_buffers, 0)
+
+        self.make_shader(&info)
+    end shader_binary
+
+    // A graphics pipeline. `color_format` is the colour target's format; `depth_format` is the depth
+    // target's, or `GPU_TEXTUREFORMAT_INVALID` for a pipeline that draws with no depth buffer.
+    // `depth_compare` is what makes a fragment pass: `GPU_COMPAREOP_LESS` keeps the nearer one.
+    pipeline(&self, vertex: &GpuShader, fragment: &GpuShader, buffers: []const c.GPUVertexBufferDescription,
+            attributes: []const c.GPUVertexAttribute, color_format: i32,
+            depth_format: i32 = GPU_TEXTUREFORMAT_INVALID, depth_test: bool = true,
+            depth_write: bool = true, depth_compare: i32 = GPU_COMPAREOP_LESS,
+            cull: i32 = GPU_CULLMODE_NONE, front_face: i32 = GPU_FRONTFACE_COUNTER_CLOCKWISE,
+            primitive: i32 = GPU_PRIMITIVETYPE_TRIANGLELIST, blend: bool = false
+            ) -> Result[&GpuPipeline, string]
+        val keep = c.GPUStencilOpState(GPU_STENCILOP_KEEP, GPU_STENCILOP_KEEP, GPU_STENCILOP_KEEP,
+                GPU_COMPAREOP_ALWAYS)
+        val blend_state = c.GPUColorTargetBlendState(GPU_BLENDFACTOR_SRC_ALPHA,
+                GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, GPU_BLENDOP_ADD, GPU_BLENDFACTOR_ONE,
+                GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA, GPU_BLENDOP_ADD, 0, blend, false, 0, 0)
+        var targets = [c.GPUColorTargetDescription(color_format, blend_state)]
+        val has_depth = depth_format != GPU_TEXTUREFORMAT_INVALID
+        var info = c.GPUGraphicsPipelineCreateInfo(
+                vertex.handle, fragment.handle,
+                c.GPUVertexInputState(as_ptr(buffers), u32(buffers.len), as_ptr(attributes),
+                        u32(attributes.len)),
+                primitive,
+                c.GPURasterizerState(GPU_FILLMODE_FILL, cull, front_face, 0.0, 0.0, 0.0, false, true, 0, 0),
+                c.GPUMultisampleState(GPU_SAMPLECOUNT_1, 0, false, false, 0, 0),
+                c.GPUDepthStencilState(depth_compare, keep, keep, 0, 0, depth_test, depth_write, false,
+                        0, 0, 0),
+                c.GPUGraphicsPipelineTargetInfo(as_ptr(targets), 1, depth_format, has_depth, 0, 0, 0),
+                0)
+
+        begin_capture()
+
+        val h = c.create_gpu_graphics_pipeline(self.handle, &info)
+
+        end_capture()
+
+        if h == null then Err(failure()) else Ok(GpuPipeline(self, h))
+    end pipeline
+
+    buffer(&self, usage: u32, size: u32) -> Result[&GpuBuffer, string]
+        var info = c.GPUBufferCreateInfo(usage, size, 0)
+        val h = c.create_gpu_buffer(self.handle, &info)
+
+        if h == null then Err(failure()) else Ok(GpuBuffer(self, h, size))
+    end buffer
+
+    // A buffer the CPU fills (`GPU_TRANSFERBUFFERUSAGE_UPLOAD`) or reads back
+    // (`GPU_TRANSFERBUFFERUSAGE_DOWNLOAD`).
+    transfer_buffer(&self, usage: i32, size: u32) -> Result[&GpuTransferBuffer, string]
+        var info = c.GPUTransferBufferCreateInfo(usage, size, 0)
+        val h = c.create_gpu_transfer_buffer(self.handle, &info)
+
+        if h == null then Err(failure()) else Ok(GpuTransferBuffer(self, h, size))
+    end transfer_buffer
+
+    // A 2D texture with one mip level and no multisampling — the colour target, the depth target and
+    // the sampled image of an ordinary scene. `usage` is a set of `GPU_TEXTUREUSAGE_*`.
+    texture(&self, format: i32, usage: u32, width: u32, height: u32) -> Result[&GpuTexture, string]
+        var info = c.GPUTextureCreateInfo(GPU_TEXTURETYPE_2D, format, usage, width, height, 1, 1,
+                GPU_SAMPLECOUNT_1, 0)
+
+        self.texture_from(&info, width, height)
+    end texture
+
+    // The general form, for an array, a cube, a volume, mip levels or multisampling.
+    texture_from(&self, info: *c.GPUTextureCreateInfo, width: u32, height: u32
+            ) -> Result[&GpuTexture, string]
+        val h = c.create_gpu_texture(self.handle, info)
+
+        if h == null then Err(failure()) else Ok(GpuTexture(self, h, width, height, info[0].format, true))
+    end texture_from
+
+    sampler(&self, filter: i32 = GPU_FILTER_LINEAR, address: i32 = GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE
+            ) -> Result[&GpuSampler, string]
+        var info = c.GPUSamplerCreateInfo(filter, filter, GPU_SAMPLERMIPMAPMODE_NEAREST, address,
+                address, address, 0.0, 1.0, GPU_COMPAREOP_INVALID, 0.0, 1000.0, false, false, 0, 0, 0)
+        val h = c.create_gpu_sampler(self.handle, &info)
+
+        if h == null then Err(failure()) else Ok(GpuSampler(self, h))
+    end sampler
+
+    // A command buffer, in which passes are recorded. It must be `submit`ted or `cancel`led.
+    command_buffer(&self) -> Option[GpuCommandBuffer]
+        val h = c.acquire_gpu_command_buffer(self.handle)
+
+        if h == null then None else Some(GpuCommandBuffer(h))
+    end command_buffer
+
+    // Present into this window. Fails, with the reason in `error()`, where the window cannot be drawn
+    // to by this device.
+    claim_window(&self, window: &Window) -> bool = c.claim_window_for_gpu_device(self.handle, window.handle)
+
+    release_window(&self, window: &Window) = c.release_window_from_gpu_device(self.handle, window.handle)
+
+    set_swapchain_parameters(&self, window: &Window, composition: i32, present_mode: i32) -> bool =
+        c.set_gpu_swapchain_parameters(self.handle, window.handle, composition, present_mode)
+
+    supports_present_mode(&self, window: &Window, present_mode: i32) -> bool =
+        c.window_supports_gpu_present_mode(self.handle, window.handle, present_mode)
+
+    supports_swapchain_composition(&self, window: &Window, composition: i32) -> bool =
+        c.window_supports_gpu_swapchain_composition(self.handle, window.handle, composition)
+
+    swapchain_format(&self, window: &Window) -> i32 =
+        c.get_gpu_swapchain_texture_format(self.handle, window.handle)
+
+    set_frames_in_flight(&self, frames: u32) -> bool = c.set_gpu_allowed_frames_in_flight(self.handle, frames)
+
+    // Whether this device can use a texture of this format for these uses.
+    supports_texture(&self, format: i32, usage: u32) -> bool =
+        c.gpu_texture_supports_format(self.handle, format, GPU_TEXTURETYPE_2D, usage)
+
+    // Block until every submitted command buffer has finished.
+    wait_idle(&self) -> bool = c.wait_for_gpu_idle(self.handle)
+end GpuDevice
+
+impl Drop for GpuDevice
+    drop(self) = if self.owned then c.destroy_gpu_device(self.handle)
+
+// Make a device. `formats` is the set of shader formats the program can supply
+// (`GPU_SHADERFORMAT_MSL` on macOS, `GPU_SHADERFORMAT_SPIRV` for Vulkan); SDL picks a driver that
+// takes one of them, or the one named by `driver` when it is not empty. `debug` turns the driver's
+// validation on.
+gpu_device(formats: u32, debug: bool = false, driver: string = "") -> Result[&GpuDevice, string]
+    begin_capture()
+
+    val h = if driver == "" then
+                c.create_gpu_device(formats, debug, null)
+            else
+                val n = cstring(driver)
+
+                c.create_gpu_device(formats, debug, n.ptr)
+
+    end_capture()
+    if h == null then Err(failure()) else Ok(GpuDevice(h, true))
+end gpu_device
+
+// Whether a device could be made for these shader formats, without making one.
+gpu_supports(formats: u32) -> bool = c.gpu_supports_shader_formats(formats, null)
+
+// How many GPU drivers this build of SDL has, and the name of the one at `index`.
+gpu_driver_count() -> i32 = c.get_num_gpu_drivers()
+
+gpu_driver_name(index: i32) -> string = from_cstring(c.get_gpu_driver(index)).unwrap_or("")
+
+// A 2D renderer drawing through a GPU device the caller made. **The device must outlive the
+// renderer**, and the window must be one this device can draw to.
+create_gpu_renderer(window: &Window, device: &GpuDevice) -> Option[&Renderer]
+    val r = c.create_gpu_renderer(device.handle, window.handle)
+
+    if r == null then None else Some(Renderer(r))
+end create_gpu_renderer
+
+// The GPU device behind a renderer made by `create_gpu_renderer`, or None for any other. **It is
+// borrowed: the renderer owns it**, so the answer must not outlive the renderer and is never
+// destroyed from here.
+gpu_renderer_device(renderer: &Renderer) -> Option[&GpuDevice]
+    val d = c.get_gpu_renderer_device(renderer.handle)
+
+    if d == null then None else Some(GpuDevice(d, false))
+end gpu_renderer_device
+
+// ## Resources
+
+struct GpuShader
+    device: &GpuDevice
+    handle: *c.GPUShader
+
+impl Drop for GpuShader
+    drop(self) = c.release_gpu_shader(self.device.handle, self.handle)
+
+struct GpuPipeline
+    device: &GpuDevice
+    handle: *c.GPUGraphicsPipeline
+
+impl Drop for GpuPipeline
+    drop(self) = c.release_gpu_graphics_pipeline(self.device.handle, self.handle)
+
+struct GpuBuffer
+    device: &GpuDevice
+    handle: *c.GPUBuffer
+    size: u32
+
+impl Drop for GpuBuffer
+    drop(self) = c.release_gpu_buffer(self.device.handle, self.handle)
+
+struct GpuTransferBuffer
+    device: &GpuDevice
+    handle: *c.GPUTransferBuffer
+    size: u32
+
+    // The bytes of the buffer, mapped into this process. **Unmap before the buffer is used by the
+    // GPU**; `cycle` asks for a fresh buffer where the old contents are still in flight.
+    map(&self, cycle: bool = false) -> *u8 = c.map_gpu_transfer_buffer(self.device.handle, self.handle, cycle)
+
+    unmap(&self) = c.unmap_gpu_transfer_buffer(self.device.handle, self.handle)
+end GpuTransferBuffer
+
+impl Drop for GpuTransferBuffer
+    drop(self) = c.release_gpu_transfer_buffer(self.device.handle, self.handle)
+
+// A texture. `owned` is false for the swapchain's, which belongs to its window.
+struct GpuTexture
+    device: &GpuDevice
+    handle: *c.GPUTexture
+    width: u32
+    height: u32
+    format: i32
+    owned: bool
+
+impl Drop for GpuTexture
+    drop(self) = if self.owned then c.release_gpu_texture(self.device.handle, self.handle)
+
+struct GpuSampler
+    device: &GpuDevice
+    handle: *c.GPUSampler
+
+impl Drop for GpuSampler
+    drop(self) = c.release_gpu_sampler(self.device.handle, self.handle)
+
+// Completes when the GPU has finished the command buffer it was taken from.
+struct GpuFence
+    device: &GpuDevice
+    handle: *c.GPUFence
+
+    // Block until the GPU is done.
+    wait(&self) -> bool
+        var fences = [self.handle]
+
+        c.wait_for_gpu_fences(self.device.handle, true, as_ptr(fences), 1)
+    end wait
+
+    // Whether it is done already, without waiting.
+    done(&self) -> bool = c.query_gpu_fence(self.device.handle, self.handle)
+end GpuFence
+
+impl Drop for GpuFence
+    drop(self) = c.release_gpu_fence(self.device.handle, self.handle)
+
+// ## Descriptions
+
+// A colour target that is cleared to this colour at the start of the pass and kept at the end.
+color_target_clear(texture: &GpuTexture, r: f32, g: f32, b: f32, a: f32) -> c.GPUColorTargetInfo =
+    c.GPUColorTargetInfo(texture.handle, 0, 0, c.FColor(r, g, b, a), GPU_LOADOP_CLEAR, GPU_STOREOP_STORE,
+            null, 0, 0, false, false, 0, 0)
+
+// A colour target whose contents are kept: drawing continues over what was there.
+color_target_load(texture: &GpuTexture) -> c.GPUColorTargetInfo =
+    c.GPUColorTargetInfo(texture.handle, 0, 0, c.FColor(0.0, 0.0, 0.0, 0.0), GPU_LOADOP_LOAD,
+            GPU_STOREOP_STORE, null, 0, 0, false, false, 0, 0)
+
+// A depth target cleared to `depth` (1.0 is the far plane) at the start of the pass.
+depth_target_clear(texture: &GpuTexture, depth: f32) -> c.GPUDepthStencilTargetInfo =
+    c.GPUDepthStencilTargetInfo(texture.handle, depth, GPU_LOADOP_CLEAR, GPU_STOREOP_DONT_CARE,
+            GPU_LOADOP_DONT_CARE, GPU_STOREOP_DONT_CARE, false, 0, 0, 0)
+
+vertex_buffer(slot: u32, pitch: u32) -> c.GPUVertexBufferDescription =
+    c.GPUVertexBufferDescription(slot, pitch, GPU_VERTEXINPUTRATE_VERTEX, 0)
+
+vertex_attribute(location: u32, slot: u32, format: i32, offset: u32) -> c.GPUVertexAttribute =
+    c.GPUVertexAttribute(location, slot, format, offset)
+
+// ## Command buffers and passes
+
+struct GpuCommandBuffer
+    handle: *c.GPUCommandBuffer
+
+    // Begin a render pass into the colour targets and the optional depth target.
+    render_pass(self, colors: []const c.GPUColorTargetInfo) -> Option[GpuRenderPass]
+        val p = c.begin_gpu_render_pass(self.handle, as_ptr(colors), u32(colors.len), null)
+
+        if p == null then None else Some(GpuRenderPass(p))
+    end render_pass
+
+    render_pass_depth(self, colors: []const c.GPUColorTargetInfo, depth: c.GPUDepthStencilTargetInfo
+            ) -> Option[GpuRenderPass]
+        var d = depth
+        val p = c.begin_gpu_render_pass(self.handle, as_ptr(colors), u32(colors.len), &d)
+
+        if p == null then None else Some(GpuRenderPass(p))
+    end render_pass_depth
+
+    copy_pass(self) -> Option[GpuCopyPass]
+        val p = c.begin_gpu_copy_pass(self.handle)
+
+        if p == null then None else Some(GpuCopyPass(p))
+    end copy_pass
+
+    // Uniform data for the shader at `slot`, copied at once: the caller's memory is not kept.
+    push_vertex_uniforms(self, slot: u32, data: *u8, length: u32) =
+        c.push_gpu_vertex_uniform_data(self.handle, slot, data, length)
+
+    push_fragment_uniforms(self, slot: u32, data: *u8, length: u32) =
+        c.push_gpu_fragment_uniform_data(self.handle, slot, data, length)
+
+    // The next image of a claimed window's swapchain, or None where there is none to draw into (a
+    // minimised window, or no frame free yet — the pass is then skipped, and the buffer still
+    // submitted). With `wait`, blocks until a frame is free.
+    swapchain_texture(self, device: &GpuDevice, window: &Window, wait: bool = true
+            ) -> Option[&GpuTexture]
+        var t: *c.GPUTexture = null
+        var w: u32 = 0
+        var h: u32 = 0
+        val ok = if wait then
+                     c.wait_and_acquire_gpu_swapchain_texture(self.handle, window.handle, &t, &w, &h)
+                 else
+                     c.acquire_gpu_swapchain_texture(self.handle, window.handle, &t, &w, &h)
+
+        if ok && t != null then
+            Some(GpuTexture(device, t, w, h, c.get_gpu_swapchain_texture_format(device.handle, window.handle),
+                    false))
+        else
+            None
+    end swapchain_texture
+
+    // Send it to the GPU. The buffer is spent.
+    submit(self) -> bool = c.submit_gpu_command_buffer(self.handle)
+
+    // Send it and take a fence that completes when the GPU has run it.
+    submit_with_fence(self, device: &GpuDevice) -> Option[&GpuFence]
+        val f = c.submit_gpu_command_buffer_and_acquire_fence(self.handle)
+
+        if f == null then None else Some(GpuFence(device, f))
+    end submit_with_fence
+
+    // Throw it away unsubmitted.
+    cancel(self) -> bool = c.cancel_gpu_command_buffer(self.handle)
+end GpuCommandBuffer
+
+struct GpuRenderPass
+    handle: *c.GPURenderPass
+
+    bind_pipeline(self, pipeline: &GpuPipeline) = c.bind_gpu_graphics_pipeline(self.handle, pipeline.handle)
+
+    set_viewport(self, x: f32, y: f32, w: f32, h: f32, min_depth: f32 = 0.0, max_depth: f32 = 1.0)
+        var v = c.GPUViewport(x, y, w, h, min_depth, max_depth)
+
+        c.set_gpu_viewport(self.handle, &v)
+    end set_viewport
+
+    set_scissor(self, x: i32, y: i32, w: i32, h: i32)
+        var r = c.Rect(x, y, w, h)
+
+        c.set_gpu_scissor(self.handle, &r)
+    end set_scissor
+
+    bind_vertex_buffer(self, slot: u32, buffer: &GpuBuffer, offset: u32 = 0)
+        var b = c.GPUBufferBinding(buffer.handle, offset)
+
+        c.bind_gpu_vertex_buffers(self.handle, slot, &b, 1)
+    end bind_vertex_buffer
+
+    bind_index_buffer(self, buffer: &GpuBuffer, element_size: i32 = GPU_INDEXELEMENTSIZE_16BIT,
+            offset: u32 = 0)
+        var b = c.GPUBufferBinding(buffer.handle, offset)
+
+        c.bind_gpu_index_buffer(self.handle, &b, element_size)
+    end bind_index_buffer
+
+    bind_fragment_sampler(self, slot: u32, texture: &GpuTexture, sampler: &GpuSampler)
+        var b = c.GPUTextureSamplerBinding(texture.handle, sampler.handle)
+
+        c.bind_gpu_fragment_samplers(self.handle, slot, &b, 1)
+    end bind_fragment_sampler
+
+    bind_vertex_sampler(self, slot: u32, texture: &GpuTexture, sampler: &GpuSampler)
+        var b = c.GPUTextureSamplerBinding(texture.handle, sampler.handle)
+
+        c.bind_gpu_vertex_samplers(self.handle, slot, &b, 1)
+    end bind_vertex_sampler
+
+    draw(self, vertices: u32, instances: u32 = 1, first_vertex: u32 = 0, first_instance: u32 = 0) =
+        c.draw_gpu_primitives(self.handle, vertices, instances, first_vertex, first_instance)
+
+    draw_indexed(self, indices: u32, instances: u32 = 1, first_index: u32 = 0, vertex_offset: i32 = 0,
+            first_instance: u32 = 0) =
+        c.draw_gpu_indexed_primitives(self.handle, indices, instances, first_index, vertex_offset,
+                first_instance)
+
+    finish(self) = c.end_gpu_render_pass(self.handle)
+end GpuRenderPass
+
+struct GpuCopyPass
+    handle: *c.GPUCopyPass
+
+    // Copy `size` bytes of a transfer buffer, from its start, into a GPU buffer.
+    upload_buffer(self, source: &GpuTransferBuffer, destination: &GpuBuffer, size: u32)
+        var s = c.GPUTransferBufferLocation(source.handle, 0)
+        var d = c.GPUBufferRegion(destination.handle, 0, size)
+
+        c.upload_to_gpu_buffer(self.handle, &s, &d, false)
+    end upload_buffer
+
+    // Copy tightly packed pixels from the start of a transfer buffer into the whole of a texture.
+    upload_texture(self, source: &GpuTransferBuffer, destination: &GpuTexture)
+        var s = c.GPUTextureTransferInfo(source.handle, 0, destination.width, destination.height)
+        var d = c.GPUTextureRegion(destination.handle, 0, 0, 0, 0, 0, destination.width,
+                destination.height, 1)
+
+        c.upload_to_gpu_texture(self.handle, &s, &d, false)
+    end upload_texture
+
+    // Copy the whole of a texture into the start of a transfer buffer, tightly packed. The pixels are
+    // readable after the command buffer's fence completes.
+    download_texture(self, source: &GpuTexture, destination: &GpuTransferBuffer)
+        var s = c.GPUTextureRegion(source.handle, 0, 0, 0, 0, 0, source.width, source.height, 1)
+        var d = c.GPUTextureTransferInfo(destination.handle, 0, source.width, source.height)
+
+        c.download_from_gpu_texture(self.handle, &s, &d)
+    end download_texture
+
+    download_buffer(self, source: &GpuBuffer, destination: &GpuTransferBuffer, size: u32)
+        var s = c.GPUBufferRegion(source.handle, 0, size)
+        var d = c.GPUTransferBufferLocation(destination.handle, 0)
+
+        c.download_from_gpu_buffer(self.handle, &s, &d)
+    end download_buffer
+
+    copy_buffer(self, source: &GpuBuffer, destination: &GpuBuffer, size: u32)
+        var s = c.GPUBufferLocation(source.handle, 0)
+        var d = c.GPUBufferLocation(destination.handle, 0)
+
+        c.copy_gpu_buffer_to_buffer(self.handle, &s, &d, size, false)
+    end copy_buffer
+
+    copy_texture(self, source: &GpuTexture, destination: &GpuTexture)
+        var s = c.GPUTextureLocation(source.handle, 0, 0, 0, 0, 0)
+        var d = c.GPUTextureLocation(destination.handle, 0, 0, 0, 0, 0)
+
+        c.copy_gpu_texture_to_texture(self.handle, &s, &d, source.width, source.height, 1, false)
+    end copy_texture
+
+    finish(self) = c.end_gpu_copy_pass(self.handle)
+end GpuCopyPass

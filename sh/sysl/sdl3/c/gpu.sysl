@@ -1,0 +1,430 @@
+// SDL_GPU, declared verbatim.
+//
+// **The declarations over `SDL_gpu.h`**, in the same spirit as `c.sysl` and by the same rule: every
+// name and convention is C's, so a device is a pointer, a failure is a null or a `false` with the
+// reason in `get_error`, and a create-info is a struct of numbers. The module above turns that into
+// handles with a `Drop` and `Result`s that carry SDL's message.
+//
+// **Every enumeration is an `i32` and every flag set a `u32`**, because C gives an enum `int`'s
+// width and `Uint32` flags theirs; the values themselves are read from the header by `c const` in
+// `gpu_constants.sysl` rather than transcribed. **Structs carry the header's own padding bytes** so
+// that a field-for-field reading of the header is also a reading of the layout, and `tests.sysl`
+// pins each size against what clang computes.
+//
+// **Deliberately absent, with the reason:**
+//
+// - *Compute* — pipelines, passes, dispatch, storage writes. A viewport renders; nothing here needs
+//   a compute shader, and the declarations are mechanical to add when something does.
+// - *Indirect draws* — `SDL_DrawGPU*PrimitivesIndirect` read a buffer of draw arguments only a
+//   compute pass or a very large scene produces.
+// - *`SDL_BlitGPUTexture` and `SDL_GenerateMipmapsForGPUTexture`* — a blit takes a 100-byte
+//   `SDL_GPUBlitInfo`; neither is needed to draw.
+// - *`SDL_GDKSuspendGPU`, `SDL_GDKResumeGPU`* — Xbox only.
+// - *The property-bag device constructor's property names* — `create_gpu_device_with_properties` is
+//   declared, but the `SDL_PROP_GPU_*` strings are left to the caller, as `15 §7` refuses a string
+//   constant from C.
+
+module sh.sysl.sdl3.c
+@link("SDL3")
+
+// ## The handles
+//
+// Eleven opaque objects, every one allocated and freed by SDL. Distinct types are what stop
+// `release_gpu_texture` accepting a buffer.
+
+opaque struct GPUDevice
+opaque struct GPUShader
+opaque struct GPUGraphicsPipeline
+opaque struct GPUBuffer
+opaque struct GPUTransferBuffer
+opaque struct GPUTexture
+opaque struct GPUSampler
+opaque struct GPUCommandBuffer
+opaque struct GPURenderPass
+opaque struct GPUCopyPass
+opaque struct GPUFence
+
+// `SDL_FColor` — four floats, the clear colour and blend constants cross as this.
+struct FColor
+    r: f32
+    g: f32
+    b: f32
+    a: f32
+
+// ## Creation descriptions
+
+struct GPUShaderCreateInfo
+    code_size: usize
+    code: *u8
+    entrypoint: *u8
+    format: u32
+    stage: i32
+    num_samplers: u32
+    num_storage_textures: u32
+    num_storage_buffers: u32
+    num_uniform_buffers: u32
+    props: u32
+
+struct GPUTextureCreateInfo
+    kind: i32
+    format: i32
+    usage: u32
+    width: u32
+    height: u32
+    layer_count_or_depth: u32
+    num_levels: u32
+    sample_count: i32
+    props: u32
+
+struct GPUBufferCreateInfo
+    usage: u32
+    size: u32
+    props: u32
+
+struct GPUTransferBufferCreateInfo
+    usage: i32
+    size: u32
+    props: u32
+
+struct GPUSamplerCreateInfo
+    min_filter: i32
+    mag_filter: i32
+    mipmap_mode: i32
+    address_mode_u: i32
+    address_mode_v: i32
+    address_mode_w: i32
+    mip_lod_bias: f32
+    max_anisotropy: f32
+    compare_op: i32
+    min_lod: f32
+    max_lod: f32
+    enable_anisotropy: bool
+    enable_compare: bool
+    padding1: u8
+    padding2: u8
+    props: u32
+
+// ## Pipeline state
+
+struct GPUVertexBufferDescription
+    slot: u32
+    pitch: u32
+    input_rate: i32
+    instance_step_rate: u32
+
+struct GPUVertexAttribute
+    location: u32
+    buffer_slot: u32
+    format: i32
+    offset: u32
+
+struct GPUVertexInputState
+    vertex_buffer_descriptions: *GPUVertexBufferDescription
+    num_vertex_buffers: u32
+    vertex_attributes: *GPUVertexAttribute
+    num_vertex_attributes: u32
+
+struct GPURasterizerState
+    fill_mode: i32
+    cull_mode: i32
+    front_face: i32
+    depth_bias_constant_factor: f32
+    depth_bias_clamp: f32
+    depth_bias_slope_factor: f32
+    enable_depth_bias: bool
+    enable_depth_clip: bool
+    padding1: u8
+    padding2: u8
+
+struct GPUMultisampleState
+    sample_count: i32
+    sample_mask: u32
+    enable_mask: bool
+    enable_alpha_to_coverage: bool
+    padding2: u8
+    padding3: u8
+
+struct GPUStencilOpState
+    fail_op: i32
+    pass_op: i32
+    depth_fail_op: i32
+    compare_op: i32
+
+struct GPUDepthStencilState
+    compare_op: i32
+    back_stencil_state: GPUStencilOpState
+    front_stencil_state: GPUStencilOpState
+    compare_mask: u8
+    write_mask: u8
+    enable_depth_test: bool
+    enable_depth_write: bool
+    enable_stencil_test: bool
+    padding1: u8
+    padding2: u8
+    padding3: u8
+
+struct GPUColorTargetBlendState
+    src_color_blendfactor: i32
+    dst_color_blendfactor: i32
+    color_blend_op: i32
+    src_alpha_blendfactor: i32
+    dst_alpha_blendfactor: i32
+    alpha_blend_op: i32
+    color_write_mask: u32
+    enable_blend: bool
+    enable_color_write_mask: bool
+    padding1: u8
+    padding2: u8
+
+struct GPUColorTargetDescription
+    format: i32
+    blend_state: GPUColorTargetBlendState
+
+struct GPUGraphicsPipelineTargetInfo
+    color_target_descriptions: *GPUColorTargetDescription
+    num_color_targets: u32
+    depth_stencil_format: i32
+    has_depth_stencil_target: bool
+    padding1: u8
+    padding2: u8
+    padding3: u8
+
+struct GPUGraphicsPipelineCreateInfo
+    vertex_shader: *GPUShader
+    fragment_shader: *GPUShader
+    vertex_input_state: GPUVertexInputState
+    primitive_type: i32
+    rasterizer_state: GPURasterizerState
+    multisample_state: GPUMultisampleState
+    depth_stencil_state: GPUDepthStencilState
+    target_info: GPUGraphicsPipelineTargetInfo
+    props: u32
+
+// ## Passes and transfers
+
+struct GPUColorTargetInfo
+    texture: *GPUTexture
+    mip_level: u32
+    layer_or_depth_plane: u32
+    clear_color: FColor
+    load_op: i32
+    store_op: i32
+    resolve_texture: *GPUTexture
+    resolve_mip_level: u32
+    resolve_layer: u32
+    cycle: bool
+    cycle_resolve_texture: bool
+    padding1: u8
+    padding2: u8
+
+struct GPUDepthStencilTargetInfo
+    texture: *GPUTexture
+    clear_depth: f32
+    load_op: i32
+    store_op: i32
+    stencil_load_op: i32
+    stencil_store_op: i32
+    cycle: bool
+    clear_stencil: u8
+    mip_level: u8
+    layer: u8
+
+struct GPUTextureTransferInfo
+    transfer_buffer: *GPUTransferBuffer
+    offset: u32
+    pixels_per_row: u32
+    rows_per_layer: u32
+
+struct GPUTransferBufferLocation
+    transfer_buffer: *GPUTransferBuffer
+    offset: u32
+
+struct GPUTextureLocation
+    texture: *GPUTexture
+    mip_level: u32
+    layer: u32
+    x: u32
+    y: u32
+    z: u32
+
+struct GPUTextureRegion
+    texture: *GPUTexture
+    mip_level: u32
+    layer: u32
+    x: u32
+    y: u32
+    z: u32
+    w: u32
+    h: u32
+    d: u32
+
+struct GPUBufferLocation
+    buffer: *GPUBuffer
+    offset: u32
+
+struct GPUBufferRegion
+    buffer: *GPUBuffer
+    offset: u32
+    size: u32
+
+struct GPUBufferBinding
+    buffer: *GPUBuffer
+    offset: u32
+
+struct GPUTextureSamplerBinding
+    texture: *GPUTexture
+    sampler: *GPUSampler
+
+struct GPUViewport
+    x: f32
+    y: f32
+    w: f32
+    h: f32
+    min_depth: f32
+    max_depth: f32
+
+// ## Device
+
+extern "SDL_GPUSupportsShaderFormats" gpu_supports_shader_formats(format_flags: u32, name: *u8) -> bool
+extern "SDL_GPUSupportsProperties" gpu_supports_properties(props: u32) -> bool
+extern "SDL_CreateGPUDevice" create_gpu_device(format_flags: u32, debug_mode: bool, name: *u8) -> *GPUDevice
+extern "SDL_CreateGPUDeviceWithProperties" create_gpu_device_with_properties(props: u32) -> *GPUDevice
+extern "SDL_DestroyGPUDevice" destroy_gpu_device(device: *GPUDevice)
+extern "SDL_GetNumGPUDrivers" get_num_gpu_drivers() -> i32
+extern "SDL_GetGPUDriver" get_gpu_driver(index: i32) -> *u8
+extern "SDL_GetGPUDeviceDriver" get_gpu_device_driver(device: *GPUDevice) -> *u8
+extern "SDL_GetGPUShaderFormats" get_gpu_shader_formats(device: *GPUDevice) -> u32
+extern "SDL_GetGPUDeviceProperties" get_gpu_device_properties(device: *GPUDevice) -> u32
+extern "SDL_SetGPUAllowedFramesInFlight" set_gpu_allowed_frames_in_flight(device: *GPUDevice, frames: u32) -> bool
+
+// ## Resources
+
+extern "SDL_CreateGPUShader" create_gpu_shader(device: *GPUDevice, info: *GPUShaderCreateInfo) -> *GPUShader
+extern "SDL_CreateGPUGraphicsPipeline" create_gpu_graphics_pipeline(device: *GPUDevice,
+        info: *GPUGraphicsPipelineCreateInfo) -> *GPUGraphicsPipeline
+extern "SDL_CreateGPUSampler" create_gpu_sampler(device: *GPUDevice, info: *GPUSamplerCreateInfo) -> *GPUSampler
+extern "SDL_CreateGPUTexture" create_gpu_texture(device: *GPUDevice, info: *GPUTextureCreateInfo) -> *GPUTexture
+extern "SDL_CreateGPUBuffer" create_gpu_buffer(device: *GPUDevice, info: *GPUBufferCreateInfo) -> *GPUBuffer
+extern "SDL_CreateGPUTransferBuffer" create_gpu_transfer_buffer(device: *GPUDevice,
+        info: *GPUTransferBufferCreateInfo) -> *GPUTransferBuffer
+extern "SDL_SetGPUBufferName" set_gpu_buffer_name(device: *GPUDevice, buffer: *GPUBuffer, text: *u8)
+extern "SDL_SetGPUTextureName" set_gpu_texture_name(device: *GPUDevice, texture: *GPUTexture, text: *u8)
+extern "SDL_ReleaseGPUTexture" release_gpu_texture(device: *GPUDevice, texture: *GPUTexture)
+extern "SDL_ReleaseGPUSampler" release_gpu_sampler(device: *GPUDevice, sampler: *GPUSampler)
+extern "SDL_ReleaseGPUBuffer" release_gpu_buffer(device: *GPUDevice, buffer: *GPUBuffer)
+extern "SDL_ReleaseGPUTransferBuffer" release_gpu_transfer_buffer(device: *GPUDevice, buffer: *GPUTransferBuffer)
+extern "SDL_ReleaseGPUShader" release_gpu_shader(device: *GPUDevice, shader: *GPUShader)
+extern "SDL_ReleaseGPUGraphicsPipeline" release_gpu_graphics_pipeline(device: *GPUDevice,
+        pipeline: *GPUGraphicsPipeline)
+extern "SDL_MapGPUTransferBuffer" map_gpu_transfer_buffer(device: *GPUDevice, buffer: *GPUTransferBuffer,
+        cycle: bool) -> *u8
+extern "SDL_UnmapGPUTransferBuffer" unmap_gpu_transfer_buffer(device: *GPUDevice, buffer: *GPUTransferBuffer)
+
+// ## Command buffers and passes
+
+extern "SDL_AcquireGPUCommandBuffer" acquire_gpu_command_buffer(device: *GPUDevice) -> *GPUCommandBuffer
+extern "SDL_PushGPUVertexUniformData" push_gpu_vertex_uniform_data(cmd: *GPUCommandBuffer, slot: u32,
+        data: *u8, length: u32)
+extern "SDL_PushGPUFragmentUniformData" push_gpu_fragment_uniform_data(cmd: *GPUCommandBuffer, slot: u32,
+        data: *u8, length: u32)
+extern "SDL_InsertGPUDebugLabel" insert_gpu_debug_label(cmd: *GPUCommandBuffer, text: *u8)
+extern "SDL_PushGPUDebugGroup" push_gpu_debug_group(cmd: *GPUCommandBuffer, name: *u8)
+extern "SDL_PopGPUDebugGroup" pop_gpu_debug_group(cmd: *GPUCommandBuffer)
+extern "SDL_SubmitGPUCommandBuffer" submit_gpu_command_buffer(cmd: *GPUCommandBuffer) -> bool
+extern "SDL_SubmitGPUCommandBufferAndAcquireFence" submit_gpu_command_buffer_and_acquire_fence(
+        cmd: *GPUCommandBuffer) -> *GPUFence
+extern "SDL_CancelGPUCommandBuffer" cancel_gpu_command_buffer(cmd: *GPUCommandBuffer) -> bool
+
+extern "SDL_BeginGPURenderPass" begin_gpu_render_pass(cmd: *GPUCommandBuffer, colors: *GPUColorTargetInfo,
+        num_colors: u32, depth: *GPUDepthStencilTargetInfo) -> *GPURenderPass
+extern "SDL_BindGPUGraphicsPipeline" bind_gpu_graphics_pipeline(pass: *GPURenderPass, pipeline: *GPUGraphicsPipeline)
+extern "SDL_SetGPUViewport" set_gpu_viewport(pass: *GPURenderPass, viewport: *GPUViewport)
+extern "SDL_SetGPUScissor" set_gpu_scissor(pass: *GPURenderPass, scissor: *Rect)
+extern "SDL_SetGPUBlendConstants" set_gpu_blend_constants(pass: *GPURenderPass, constants: FColor)
+extern "SDL_SetGPUStencilReference" set_gpu_stencil_reference(pass: *GPURenderPass, reference: u8)
+extern "SDL_BindGPUVertexBuffers" bind_gpu_vertex_buffers(pass: *GPURenderPass, first_slot: u32,
+        bindings: *GPUBufferBinding, num_bindings: u32)
+extern "SDL_BindGPUIndexBuffer" bind_gpu_index_buffer(pass: *GPURenderPass, binding: *GPUBufferBinding,
+        element_size: i32)
+extern "SDL_BindGPUVertexSamplers" bind_gpu_vertex_samplers(pass: *GPURenderPass, first_slot: u32,
+        bindings: *GPUTextureSamplerBinding, num_bindings: u32)
+extern "SDL_BindGPUVertexStorageTextures" bind_gpu_vertex_storage_textures(pass: *GPURenderPass,
+        first_slot: u32, textures: **GPUTexture, num_bindings: u32)
+extern "SDL_BindGPUVertexStorageBuffers" bind_gpu_vertex_storage_buffers(pass: *GPURenderPass,
+        first_slot: u32, buffers: **GPUBuffer, num_bindings: u32)
+extern "SDL_BindGPUFragmentSamplers" bind_gpu_fragment_samplers(pass: *GPURenderPass, first_slot: u32,
+        bindings: *GPUTextureSamplerBinding, num_bindings: u32)
+extern "SDL_BindGPUFragmentStorageTextures" bind_gpu_fragment_storage_textures(pass: *GPURenderPass,
+        first_slot: u32, textures: **GPUTexture, num_bindings: u32)
+extern "SDL_BindGPUFragmentStorageBuffers" bind_gpu_fragment_storage_buffers(pass: *GPURenderPass,
+        first_slot: u32, buffers: **GPUBuffer, num_bindings: u32)
+extern "SDL_DrawGPUIndexedPrimitives" draw_gpu_indexed_primitives(pass: *GPURenderPass, num_indices: u32,
+        num_instances: u32, first_index: u32, vertex_offset: i32, first_instance: u32)
+extern "SDL_DrawGPUPrimitives" draw_gpu_primitives(pass: *GPURenderPass, num_vertices: u32,
+        num_instances: u32, first_vertex: u32, first_instance: u32)
+extern "SDL_EndGPURenderPass" end_gpu_render_pass(pass: *GPURenderPass)
+
+extern "SDL_BeginGPUCopyPass" begin_gpu_copy_pass(cmd: *GPUCommandBuffer) -> *GPUCopyPass
+extern "SDL_UploadToGPUTexture" upload_to_gpu_texture(pass: *GPUCopyPass, source: *GPUTextureTransferInfo,
+        destination: *GPUTextureRegion, cycle: bool)
+extern "SDL_UploadToGPUBuffer" upload_to_gpu_buffer(pass: *GPUCopyPass, source: *GPUTransferBufferLocation,
+        destination: *GPUBufferRegion, cycle: bool)
+extern "SDL_CopyGPUTextureToTexture" copy_gpu_texture_to_texture(pass: *GPUCopyPass,
+        source: *GPUTextureLocation, destination: *GPUTextureLocation, w: u32, h: u32, d: u32, cycle: bool)
+extern "SDL_CopyGPUBufferToBuffer" copy_gpu_buffer_to_buffer(pass: *GPUCopyPass, source: *GPUBufferLocation,
+        destination: *GPUBufferLocation, size: u32, cycle: bool)
+extern "SDL_DownloadFromGPUTexture" download_from_gpu_texture(pass: *GPUCopyPass, source: *GPUTextureRegion,
+        destination: *GPUTextureTransferInfo)
+extern "SDL_DownloadFromGPUBuffer" download_from_gpu_buffer(pass: *GPUCopyPass, source: *GPUBufferRegion,
+        destination: *GPUTransferBufferLocation)
+extern "SDL_EndGPUCopyPass" end_gpu_copy_pass(pass: *GPUCopyPass)
+
+// ## Windows, the swapchain and synchronisation
+
+extern "SDL_WindowSupportsGPUSwapchainComposition" window_supports_gpu_swapchain_composition(
+        device: *GPUDevice, window: *Window, composition: i32) -> bool
+extern "SDL_WindowSupportsGPUPresentMode" window_supports_gpu_present_mode(device: *GPUDevice,
+        window: *Window, mode: i32) -> bool
+extern "SDL_ClaimWindowForGPUDevice" claim_window_for_gpu_device(device: *GPUDevice, window: *Window) -> bool
+extern "SDL_ReleaseWindowFromGPUDevice" release_window_from_gpu_device(device: *GPUDevice, window: *Window)
+extern "SDL_SetGPUSwapchainParameters" set_gpu_swapchain_parameters(device: *GPUDevice, window: *Window,
+        composition: i32, mode: i32) -> bool
+extern "SDL_GetGPUSwapchainTextureFormat" get_gpu_swapchain_texture_format(device: *GPUDevice,
+        window: *Window) -> i32
+extern "SDL_AcquireGPUSwapchainTexture" acquire_gpu_swapchain_texture(cmd: *GPUCommandBuffer,
+        window: *Window, texture: **GPUTexture, w: *u32, h: *u32) -> bool
+extern "SDL_WaitForGPUSwapchain" wait_for_gpu_swapchain(device: *GPUDevice, window: *Window) -> bool
+extern "SDL_WaitAndAcquireGPUSwapchainTexture" wait_and_acquire_gpu_swapchain_texture(
+        cmd: *GPUCommandBuffer, window: *Window, texture: **GPUTexture, w: *u32, h: *u32) -> bool
+
+extern "SDL_WaitForGPUIdle" wait_for_gpu_idle(device: *GPUDevice) -> bool
+extern "SDL_WaitForGPUFences" wait_for_gpu_fences(device: *GPUDevice, wait_all: bool,
+        fences: **GPUFence, num_fences: u32) -> bool
+extern "SDL_QueryGPUFence" query_gpu_fence(device: *GPUDevice, fence: *GPUFence) -> bool
+extern "SDL_ReleaseGPUFence" release_gpu_fence(device: *GPUDevice, fence: *GPUFence)
+
+// ## Format queries
+
+extern "SDL_GPUTextureFormatTexelBlockSize" gpu_texture_format_texel_block_size(format: i32) -> u32
+extern "SDL_GPUTextureSupportsFormat" gpu_texture_supports_format(device: *GPUDevice, format: i32,
+        kind: i32, usage: u32) -> bool
+extern "SDL_GPUTextureSupportsSampleCount" gpu_texture_supports_sample_count(device: *GPUDevice,
+        format: i32, sample_count: i32) -> bool
+extern "SDL_CalculateGPUTextureFormatSize" calculate_gpu_texture_format_size(format: i32, width: u32,
+        height: u32, depth_or_layers: u32) -> u32
+
+// ## The log hook
+//
+// SDL's Metal and Vulkan drivers report why a shader or pipeline failed through `SDL_LogError`, not
+// `SDL_SetError`, so `get_error` is empty after such a failure. The pleasant layer installs a log
+// output function around a creation call to catch the reason.
+
+extern "SDL_GetLogOutputFunction" get_log_output_function(
+        callback: **extern(*u8, i32, i32, *u8) -> unit, userdata: **u8)
+extern "SDL_SetLogOutputFunction" set_log_output_function(
+        callback: *extern(*u8, i32, i32, *u8) -> unit, userdata: *u8)
+
+// ## The GPU renderer — the 2D renderer on a GPU device
+
+extern "SDL_CreateGPURenderer" create_gpu_renderer(device: *GPUDevice, window: *Window) -> *Renderer
+extern "SDL_GetGPURendererDevice" get_gpu_renderer_device(renderer: *Renderer) -> *GPUDevice

@@ -10,7 +10,7 @@ on-screen keyboard, and the lifecycle events an app is stopped and restarted by.
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.12" }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.13" }
 }
 ```
 
@@ -544,7 +544,7 @@ SDL's queue, and `pumped` from `sh.sysl.kairos.pump` composes it with any kairos
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.12", features = [kairos] }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.13", features = [kairos] }
   kairos { git = "github.com/sysl-lang/kairos", version = "0.1.7" }
 }
 ```
@@ -617,6 +617,47 @@ the open answer `None`, with `error()` saying *"This app doesn't have RECORD_AUD
 macOS the system asks once, on behalf of whatever launched the program: the terminal, for a program
 run from one.
 
+## GPU
+
+`SDL_GPU` is bound for drawing a 3D scene: a device, shaders, graphics pipelines, vertex and index
+buffers, transfer buffers, textures (colour and depth), samplers, command buffers, render and copy
+passes, draws, the swapchain, fences and texture readback. The numbers (`GPU_TEXTUREFORMAT_*`,
+`GPU_COMPAREOP_*`, and the rest) come from `SDL_gpu.h` by the C compiler, like every other constant
+here.
+
+```
+init(INIT_VIDEO)
+val dev = gpu_device(GPU_SHADERFORMAT_MSL, debug = true).unwrap()
+val vs = dev.shader(source, GPU_SHADERFORMAT_MSL, GPU_SHADERSTAGE_VERTEX, "vertex_main").unwrap()
+val color = dev.texture(GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, GPU_TEXTUREUSAGE_COLOR_TARGET, 64, 64).unwrap()
+
+val cmd = dev.command_buffer().unwrap()
+val pass = cmd.render_pass([color_target_clear(color, 0.0, 0.0, 1.0, 1.0)]).unwrap()
+pass.bind_pipeline(pipeline)
+pass.draw(3)
+pass.finish()
+cmd.submit()
+```
+
+- **Creation answers `Result[&T, string]` and the `Err` is the driver's own reason.** SDL's Metal and
+  Vulkan drivers report a shader that will not compile through the log and leave `error()` empty, so
+  the binding points SDL's log at a capture for the length of each creation call. That state is
+  process-wide: create resources from one thread at a time.
+- **Everything made from a device holds the device**, so it is destroyed after the last thing made
+  from it. Command buffers, passes and a window's swapchain texture are not owned handles: a command
+  buffer is spent by `submit`, a pass by `finish`.
+- **A device needs the video subsystem, and no window.** `init(INIT_VIDEO)` is enough; the tests render
+  into a texture and read it back, and open nothing. SDL's `dummy` video driver has no GPU backend, so
+  the tests use the platform's own driver, which on macOS needs a shell inside the desktop session.
+- **Shaders are the program's.** SDL takes MSL source or metallib on Metal, SPIR-V on Vulkan, DXIL on
+  Direct3D 12; `shader_formats()` says which a device takes, and a shader in another format is an
+  `Err` rather than the assertion SDL raises.
+- **`create_gpu_renderer` and `gpu_renderer_device`** bind the 2D renderer on a GPU device. They need
+  a window, so the test suite does not exercise them.
+- **Absent on purpose:** compute passes and pipelines, indirect draws, `SDL_BlitGPUTexture`, mipmap
+  generation, and the Xbox suspend calls. A viewport draws; the rest is mechanical to add when a
+  program needs it.
+
 ## Tests
 
 ```
@@ -629,6 +670,13 @@ sound card. `sysl test` on the package turns every feature on; `sysl test --no-d
 leaves the `kairos` feature off and runs the other seventy-three without fetching kairos. The pump's
 fourteen need only SDL's events subsystem: a wake or an event pushed from a second thread ends a wait with no timeout, a kairos timer
 and an SDL event run in one loop over `pumped(host(), …)`, and the wake never reaches the sink.
+
+**The nine GPU tests are the exception to "headless"**: SDL's dummy video driver has no GPU backend,
+so they start the platform's own video subsystem and need a macOS shell inside the desktop session
+(`launchctl managername` says `Aqua`). They still open no window. Two overlapping triangles at
+different depths are drawn into a colour texture with a depth texture, in both draw orders, and the
+pixels are read back and asserted exactly; a third test draws with the depth test off and shows the
+last draw winning instead, which is the evidence the first two are about depth.
 
 **Half of them exist to pin the enumerations.** Every `code` and `of` is a `match` against a name
 the C compiler resolved, so a *typo* is impossible — but that the right variant sits on the right

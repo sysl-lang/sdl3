@@ -1,0 +1,275 @@
+module sh.sysl.sdl3
+@tests
+
+import sh.sysl.sdl3.c
+import sysl.raw.ptr_cast
+import sysl.buf.{Buf, buf}
+
+// SDL_GPU, against a real GPU device.
+//
+// **No test here opens a window.** A GPU device needs none, and everything drawn goes into a texture
+// that is then copied into a transfer buffer and read back, so what is asserted is the pixels the GPU
+// produced and not anything that crossed a display. The shaders are Metal Shading Language source,
+// so the render tests need a Metal device; where `SDL_CreateGPUDevice` finds none they fail with
+// SDL's reason, which is the right answer on a machine that cannot run them.
+//
+// **The render is chosen to make depth the only thing that can decide the overlap.** Two triangles of
+// different colours cover overlapping bands of a 64 by 64 target; with the depth test on the nearer
+// one must win the overlap whichever is drawn first, and with it off the one drawn last wins — which
+// is the mutation that proves the test can fail. Colours use only 0.0 and 1.0 channels, so every
+// expected byte is exact.
+
+val WIDTH: u32 = 64
+val HEIGHT: u32 = 64
+
+val SHADERS: string = raw"""
+#include <metal_stdlib>
+using namespace metal;
+
+struct VertexIn {
+    float3 position [[attribute(0)]];
+    float4 color [[attribute(1)]];
+};
+
+struct VertexOut {
+    float4 position [[position]];
+    float4 color;
+};
+
+vertex VertexOut vertex_main(VertexIn in [[stage_in]]) {
+    VertexOut out;
+    out.position = float4(in.position, 1.0);
+    out.color = in.color;
+    return out;
+}
+
+fragment float4 fragment_main(VertexOut in [[stage_in]]) {
+    return in.color;
+}
+"""
+
+// A Metal device. SDL_GPU needs the video subsystem up, and `headless` brings it up on the dummy
+// driver, so no window server is involved and no window is made.
+test_device() -> &GpuDevice
+    assert(init(INIT_VIDEO), "SDL starts: " + error())
+
+    gpu_device(GPU_SHADERFORMAT_MSL, true).unwrap()
+end test_device
+
+// ## Layout
+
+// The create-infos are read by SDL as C structs, so a field in the wrong place is a corrupted call
+// and not a compile error. These are the sizes clang computes for the same declarations.
+@test
+the_gpu_layouts_agree_with_c()
+    assert_eq(sizeof(c.GPUShaderCreateInfo), 56usize, "SDL_GPUShaderCreateInfo")
+    assert_eq(sizeof(c.GPUGraphicsPipelineCreateInfo), 168usize, "SDL_GPUGraphicsPipelineCreateInfo")
+    assert_eq(sizeof(c.GPUTextureCreateInfo), 36usize, "SDL_GPUTextureCreateInfo")
+    assert_eq(sizeof(c.GPUBufferCreateInfo), 12usize, "SDL_GPUBufferCreateInfo")
+    assert_eq(sizeof(c.GPUTransferBufferCreateInfo), 12usize, "SDL_GPUTransferBufferCreateInfo")
+    assert_eq(sizeof(c.GPUSamplerCreateInfo), 52usize, "SDL_GPUSamplerCreateInfo")
+    assert_eq(sizeof(c.GPUColorTargetInfo), 64usize, "SDL_GPUColorTargetInfo")
+    assert_eq(sizeof(c.GPUDepthStencilTargetInfo), 32usize, "SDL_GPUDepthStencilTargetInfo")
+    assert_eq(sizeof(c.GPUTextureTransferInfo), 24usize, "SDL_GPUTextureTransferInfo")
+    assert_eq(sizeof(c.GPUTextureRegion), 40usize, "SDL_GPUTextureRegion")
+    assert_eq(sizeof(c.GPUBufferBinding), 16usize, "SDL_GPUBufferBinding")
+    assert_eq(sizeof(c.GPUVertexBufferDescription), 16usize, "SDL_GPUVertexBufferDescription")
+    assert_eq(sizeof(c.GPUVertexAttribute), 16usize, "SDL_GPUVertexAttribute")
+    assert_eq(sizeof(c.GPUVertexInputState), 32usize, "SDL_GPUVertexInputState")
+    assert_eq(sizeof(c.GPURasterizerState), 28usize, "SDL_GPURasterizerState")
+    assert_eq(sizeof(c.GPUMultisampleState), 12usize, "SDL_GPUMultisampleState")
+    assert_eq(sizeof(c.GPUDepthStencilState), 44usize, "SDL_GPUDepthStencilState")
+    assert_eq(sizeof(c.GPUColorTargetDescription), 36usize, "SDL_GPUColorTargetDescription")
+    assert_eq(sizeof(c.GPUColorTargetBlendState), 32usize, "SDL_GPUColorTargetBlendState")
+    assert_eq(sizeof(c.GPUGraphicsPipelineTargetInfo), 24usize, "SDL_GPUGraphicsPipelineTargetInfo")
+    assert_eq(sizeof(c.GPUStencilOpState), 16usize, "SDL_GPUStencilOpState")
+    assert_eq(sizeof(c.GPUTransferBufferLocation), 16usize, "SDL_GPUTransferBufferLocation")
+    assert_eq(sizeof(c.GPUBufferRegion), 16usize, "SDL_GPUBufferRegion")
+    assert_eq(sizeof(c.GPUTextureSamplerBinding), 16usize, "SDL_GPUTextureSamplerBinding")
+    assert_eq(sizeof(c.GPUViewport), 24usize, "SDL_GPUViewport")
+    assert_eq(sizeof(c.GPUTextureLocation), 32usize, "SDL_GPUTextureLocation")
+    assert_eq(sizeof(c.GPUBufferLocation), 16usize, "SDL_GPUBufferLocation")
+    assert_eq(sizeof(c.FColor), 16usize, "SDL_FColor")
+
+// ## The device
+
+@test
+a_device_needs_no_window()
+    val dev = test_device()
+
+    assert(dev.driver() != "", "the device names its driver")
+    assert((dev.shader_formats() & GPU_SHADERFORMAT_MSL) != 0, "and accepts the MSL it was asked for")
+    assert(dev.supports_texture(GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, GPU_TEXTUREUSAGE_COLOR_TARGET),
+            "an RGBA8 colour target is supported")
+    assert(dev.supports_texture(GPU_TEXTUREFORMAT_D16_UNORM, GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET),
+            "and a 16-bit depth target")
+    assert(gpu_driver_count() > 0, "SDL has drivers")
+    assert(gpu_driver_name(0) != "", "and names them")
+
+// ## The error path
+
+@test
+a_shader_that_does_not_compile_is_an_error_carrying_sdls_message()
+    val dev = test_device()
+
+    dev.shader("this is not shading language", GPU_SHADERFORMAT_MSL, GPU_SHADERSTAGE_VERTEX,
+            "vertex_main") match
+        Err(e) -> assert(e.contains("expected unqualified-id"), "the compiler's own diagnostic: " + e)
+        Ok(s) -> assert(false, "garbage source made a shader")
+
+@test
+an_entry_point_that_is_not_there_is_an_error()
+    val dev = test_device()
+
+    dev.shader(SHADERS, GPU_SHADERFORMAT_MSL, GPU_SHADERSTAGE_VERTEX, "no_such_function") match
+        Err(e) -> assert(e.contains("MTLFunction"), "the driver's own message: " + e)
+        Ok(s) -> assert(false, "a missing entry point made a shader")
+
+@test
+a_format_the_device_does_not_take_is_an_error()
+    val dev = test_device()
+
+    dev.shader(SHADERS, GPU_SHADERFORMAT_SPIRV, GPU_SHADERSTAGE_VERTEX, "vertex_main") match
+        Err(e) -> assert(e.contains("format"), "and says it is the format: " + e)
+        Ok(s) -> assert(false, "SPIR-V was accepted by a Metal device")
+
+@test
+a_device_for_a_format_nothing_supports_is_an_error()
+    assert(headless(), "SDL starts headless: " + error())
+
+    gpu_device(0) match
+        Err(e) -> assert(e.len > 0, "SDL says why: " + e)
+        Ok(d) -> assert(false, "a device was made for no shader format at all")
+
+// ## Rendering
+
+// `p[i]` as an f32 store: the transfer buffer is bytes and a vertex is seven floats.
+put_vertex(p: *f32, n: usize, x: f32, y: f32, z: f32, r: f32, g: f32, b: f32)
+    val at = n * 7
+
+    p[at] = x
+    p[at + 1] = y
+    p[at + 2] = z
+    p[at + 3] = r
+    p[at + 4] = g
+    p[at + 5] = b
+    p[at + 6] = 1.0
+
+// Draw the two overlapping triangles into a 64 by 64 RGBA target cleared to blue and read it back.
+//
+// The red triangle (A) is nearer, at depth 0.25, and covers x + y <= 0.4 within the square from
+// -0.9; the green (B) is farther, at 0.75, and covers x + y >= -0.4 up to 0.9. They overlap in the
+// band between, and `a_first` chooses which is drawn first.
+render_scene(dev: &GpuDevice, a_first: bool, depth_test: bool) -> Buf[u8]
+    val vs = dev.shader(SHADERS, GPU_SHADERFORMAT_MSL, GPU_SHADERSTAGE_VERTEX, "vertex_main").unwrap()
+    val fs = dev.shader(SHADERS, GPU_SHADERFORMAT_MSL, GPU_SHADERSTAGE_FRAGMENT, "fragment_main").unwrap()
+    val buffers = [vertex_buffer(0, 28)]
+    val attributes = [vertex_attribute(0, 0, GPU_VERTEXELEMENTFORMAT_FLOAT3, 0),
+            vertex_attribute(1, 0, GPU_VERTEXELEMENTFORMAT_FLOAT4, 12)]
+    val pipeline = dev.pipeline(vs, fs, buffers, attributes,
+            GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, depth_format = GPU_TEXTUREFORMAT_D16_UNORM,
+            depth_test = depth_test).unwrap()
+
+    val color = dev.texture(GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, GPU_TEXTUREUSAGE_COLOR_TARGET, WIDTH,
+            HEIGHT).unwrap()
+    val depth = dev.texture(GPU_TEXTUREFORMAT_D16_UNORM, GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET, WIDTH,
+            HEIGHT).unwrap()
+
+    val vertex_bytes: u32 = 6 * 28
+    val vertices = dev.buffer(GPU_BUFFERUSAGE_VERTEX, vertex_bytes).unwrap()
+    val staging = dev.transfer_buffer(GPU_TRANSFERBUFFERUSAGE_UPLOAD, vertex_bytes).unwrap()
+    val readback = dev.transfer_buffer(GPU_TRANSFERBUFFERUSAGE_DOWNLOAD, WIDTH * HEIGHT * 4).unwrap()
+
+    val p: *f32 = ptr_cast(staging.map())
+
+    put_vertex(p, 0, -0.9, -0.9, 0.25, 1.0, 0.0, 0.0)
+    put_vertex(p, 1, 1.3, -0.9, 0.25, 1.0, 0.0, 0.0)
+    put_vertex(p, 2, -0.9, 1.3, 0.25, 1.0, 0.0, 0.0)
+    put_vertex(p, 3, 0.9, 0.9, 0.75, 0.0, 1.0, 0.0)
+    put_vertex(p, 4, -1.3, 0.9, 0.75, 0.0, 1.0, 0.0)
+    put_vertex(p, 5, 0.9, -1.3, 0.75, 0.0, 1.0, 0.0)
+    staging.unmap()
+
+    val cmd = dev.command_buffer().unwrap()
+    val copy = cmd.copy_pass().unwrap()
+
+    copy.upload_buffer(staging, vertices, vertex_bytes)
+    copy.finish()
+
+    val pass = cmd.render_pass_depth([color_target_clear(color, 0.0, 0.0, 1.0, 1.0)],
+            depth_target_clear(depth, 1.0)).unwrap()
+
+    pass.bind_pipeline(pipeline)
+    pass.bind_vertex_buffer(0, vertices)
+
+    if a_first then
+        pass.draw(3, first_vertex = 0)
+        pass.draw(3, first_vertex = 3)
+    else
+        pass.draw(3, first_vertex = 3)
+        pass.draw(3, first_vertex = 0)
+
+    pass.finish()
+
+    val out = cmd.copy_pass().unwrap()
+
+    out.download_texture(color, readback)
+    out.finish()
+
+    val fence = cmd.submit_with_fence(dev).unwrap()
+
+    assert(fence.wait(), "the GPU finished")
+
+    val bytes: *u8 = readback.map()
+    var pixels: Buf[u8] = buf()
+
+    for i in 0..<usize(WIDTH * HEIGHT * 4)
+        pixels.push(bytes[i])
+
+    readback.unmap()
+    pixels
+end render_scene
+
+check_pixel(pixels: Buf[u8], x: usize, y: usize, r: u8, g: u8, b: u8, what: string)
+    val at = (y * usize(WIDTH) + x) * 4
+
+    assert_eq(pixels[at], r, what + ": red at " + x.to_string() + "," + y.to_string())
+    assert_eq(pixels[at + 1], g, what + ": green at " + x.to_string() + "," + y.to_string())
+    assert_eq(pixels[at + 2], b, what + ": blue at " + x.to_string() + "," + y.to_string())
+    assert_eq(pixels[at + 3], u8(255), what + ": alpha at " + x.to_string() + "," + y.to_string())
+
+// The nearer triangle wins the overlap, and the order of the draws does not matter.
+check_depth_scene(pixels: Buf[u8])
+    check_pixel(pixels, 0, 0, 0, 0, 255, "the background is the clear colour")
+    check_pixel(pixels, 63, 63, 0, 0, 255, "the background, opposite corner")
+    check_pixel(pixels, 63, 0, 0, 0, 255, "the background, third corner")
+    check_pixel(pixels, 0, 63, 0, 0, 255, "the background, fourth corner")
+    check_pixel(pixels, 13, 51, 255, 0, 0, "the red triangle alone")
+    check_pixel(pixels, 51, 13, 0, 255, 0, "the green triangle alone")
+    check_pixel(pixels, 32, 32, 255, 0, 0, "the nearer red wins the overlap's middle")
+    check_pixel(pixels, 24, 32, 255, 0, 0, "and its left part")
+    check_pixel(pixels, 40, 32, 255, 0, 0, "and its right part")
+
+@test
+the_nearer_triangle_wins_when_it_is_drawn_first()
+    val dev = test_device()
+
+    check_depth_scene(render_scene(dev, true, true))
+
+@test
+the_nearer_triangle_wins_when_it_is_drawn_last()
+    val dev = test_device()
+
+    check_depth_scene(render_scene(dev, false, true))
+
+// Without the test the draw order decides, which is what makes the two tests above evidence of the
+// depth buffer rather than of the draw order.
+@test
+without_the_depth_test_the_last_draw_wins()
+    val dev = test_device()
+    val a_last = render_scene(dev, false, false)
+    val b_last = render_scene(dev, true, false)
+
+    check_pixel(a_last, 32, 32, 255, 0, 0, "red drawn last covers the overlap")
+    check_pixel(b_last, 32, 32, 0, 255, 0, "green drawn last covers the overlap")
+    check_pixel(b_last, 0, 0, 0, 0, 255, "the background is still the clear colour")
