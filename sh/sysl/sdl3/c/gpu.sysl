@@ -170,7 +170,7 @@ struct GPUColorTargetBlendState
     src_alpha_blendfactor: i32
     dst_alpha_blendfactor: i32
     alpha_blend_op: i32
-    color_write_mask: u32
+    color_write_mask: u8
     enable_blend: bool
     enable_color_write_mask: bool
     padding1: u8
