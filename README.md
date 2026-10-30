@@ -10,7 +10,7 @@ on-screen keyboard, and the lifecycle events an app is stopped and restarted by.
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.13" }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.14" }
 }
 ```
 
@@ -544,7 +544,7 @@ SDL's queue, and `pumped` from `sh.sysl.kairos.pump` composes it with any kairos
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.13", features = [kairos] }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.14", features = [kairos] }
   kairos { git = "github.com/sysl-lang/kairos", version = "0.1.7" }
 }
 ```
@@ -652,8 +652,11 @@ cmd.submit()
 - **Shaders are the program's.** SDL takes MSL source or metallib on Metal, SPIR-V on Vulkan, DXIL on
   Direct3D 12; `shader_formats()` says which a device takes, and a shader in another format is an
   `Err` rather than the assertion SDL raises.
-- **`create_gpu_renderer` and `gpu_renderer_device`** bind the 2D renderer on a GPU device. They need
-  a window, so the test suite does not exercise them.
+- **`create_gpu_renderer`, `offscreen_gpu_renderer` and `gpu_renderer_device`** bind the 2D renderer on
+  a GPU device, with a window or drawing into a target texture. `gpu_texture_view` lets that renderer
+  draw a texture the device made, without a copy, and `BlendMode.Premultiplied` composites pixels whose
+  colour is already multiplied by their alpha. The tests use the offscreen one; `sysl-lang/syslui-sdl`'s
+  `examples/cube` runs the windowed one, swapchain included.
 - **Absent on purpose:** compute passes and pipelines, indirect draws, `SDL_BlitGPUTexture`, mipmap
   generation, and the Xbox suspend calls. A viewport draws; the rest is mechanical to add when a
   program needs it.
@@ -664,14 +667,14 @@ cmd.submit()
 sysl test .
 ```
 
-Ninety tests, run headless against a real SDL3 — the dummy video and audio drivers create
+Ninety-two tests, run headless against a real SDL3 — the dummy video and audio drivers create
 windows, renderers, textures and devices and draw into memory, so nothing here needs a display or a
 sound card. `sysl test` on the package turns every feature on; `sysl test --no-default-features .`
-leaves the `kairos` feature off and runs the other seventy-three without fetching kairos. The pump's
+leaves the `kairos` feature off and runs the other seventy-five without fetching kairos. The pump's
 fourteen need only SDL's events subsystem: a wake or an event pushed from a second thread ends a wait with no timeout, a kairos timer
 and an SDL event run in one loop over `pumped(host(), …)`, and the wake never reaches the sink.
 
-**The nine GPU tests are the exception to "headless"**: SDL's dummy video driver has no GPU backend,
+**The eleven GPU tests are the exception to "headless"**: SDL's dummy video driver has no GPU backend,
 so they start the platform's own video subsystem and need a macOS shell inside the desktop session
 (`launchctl managername` says `Aqua`). They still open no window. Two overlapping triangles at
 different depths are drawn into a colour texture with a depth texture, in both draw orders, and the

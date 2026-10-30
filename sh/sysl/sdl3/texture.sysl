@@ -147,6 +147,10 @@ enum BlendMode
     // The usual alpha compositing, `dst = src * a + dst * (1 - a)`.
     Blend
 
+    // Compositing for pixels whose colour is already multiplied by their alpha,
+    // `dst = src + dst * (1 - a)`. `Blend` on such pixels multiplies twice and darkens every soft edge.
+    Premultiplied
+
     // Additive, which is what a glow or a spark is drawn with.
     Add
 
@@ -160,6 +164,7 @@ enum BlendMode
         self match
             Off -> BLENDMODE_NONE
             Blend -> BLENDMODE_BLEND
+            Premultiplied -> BLENDMODE_BLEND_PREMULTIPLIED
             Add -> BLENDMODE_ADD
             Mod -> BLENDMODE_MOD
             Mul -> BLENDMODE_MUL
@@ -170,6 +175,7 @@ impl Display for BlendMode
         val s = self match
             Off -> "none"
             Blend -> "blend"
+            Premultiplied -> "premultiplied"
             Add -> "add"
             Mod -> "mod"
             Mul -> "mul"
@@ -349,6 +355,13 @@ struct Surface
     // per-pixel call, so it is for building a small fixture rather than for filling an image.
     write_pixel(&self, x: i32, y: i32, col: Color) -> bool =
         c.write_surface_pixel(self.handle, x, y, col.r, col.g, col.b, col.a)
+
+    // A new surface holding these pixels in another format, or `None` with the reason in `error()`.
+    convert(&self, format: PixelFormat) -> Option[&Surface]
+        val s = c.convert_surface(self.handle, format.code())
+
+        if s == null then None else Some(Surface(s))
+    end convert
 end Surface
 
 // The surface goes when the last reference to it does — including the one a failed decode never

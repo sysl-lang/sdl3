@@ -402,6 +402,7 @@ extern "SDL_UpdateNVTexture" update_nv_texture(texture: *Texture, rect: *Rect,
 
 extern "SDL_CreateSurface" create_surface(w: i32, h: i32, format: u32) -> *Surface
 extern "SDL_DestroySurface" destroy_surface(surface: *Surface)
+extern "SDL_ConvertSurface" convert_surface(surface: *Surface, format: u32) -> *Surface
 extern "SDL_ReadSurfacePixel" read_surface_pixel(surface: *Surface, x: i32, y: i32,
                                                  r: *u8, g: *u8, b: *u8, a: *u8) -> bool
 extern "SDL_WriteSurfacePixel" write_surface_pixel(surface: *Surface, x: i32, y: i32,

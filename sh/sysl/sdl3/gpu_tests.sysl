@@ -4,6 +4,7 @@ module sh.sysl.sdl3
 import sh.sysl.sdl3.c
 import sysl.raw.ptr_cast
 import sysl.buf.{Buf, buf}
+import sysl.process
 
 // SDL_GPU, against a real GPU device.
 //
@@ -48,9 +49,18 @@ fragment float4 fragment_main(VertexOut in [[stage_in]]) {
 }
 """
 
+// Whether this process is inside the macOS desktop session. Outside it, starting the platform's video
+// driver can block for ever instead of failing, so this is asked before SDL is started.
+in_desktop_session() -> bool
+    process.capture("/bin/launchctl", ["managername"]) match
+        Ok(out) -> out.text.starts_with("Aqua")
+        Err(e) -> false
+end in_desktop_session
+
 // A Metal device. SDL_GPU needs the video subsystem up, and `headless` brings it up on the dummy
 // driver, so no window server is involved and no window is made.
 test_device() -> &GpuDevice
+    assert(in_desktop_session(), "the GPU tests need a shell inside the desktop session")
     assert(init(INIT_VIDEO), "SDL starts: " + error())
 
     gpu_device(GPU_SHADERFORMAT_MSL, true).unwrap()
@@ -273,3 +283,86 @@ without_the_depth_test_the_last_draw_wins()
     check_pixel(a_last, 32, 32, 255, 0, 0, "red drawn last covers the overlap")
     check_pixel(b_last, 32, 32, 0, 255, 0, "green drawn last covers the overlap")
     check_pixel(b_last, 0, 0, 0, 0, 255, "the background is still the clear colour")
+
+// ## The 2D renderer on a device
+
+// A GPU texture cleared to one colour, usable both as a target and by the renderer.
+cleared(dev: &GpuDevice, r: f32, g: f32, b: f32) -> &GpuTexture
+    val color = dev.texture(GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+            GPU_TEXTUREUSAGE_COLOR_TARGET | GPU_TEXTUREUSAGE_SAMPLER, 2, 1).unwrap()
+    val cmd = dev.command_buffer().unwrap()
+
+    cmd.render_pass([color_target_clear(color, r, g, b, 1.0)]).unwrap().finish()
+    cmd.submit()
+    color
+end cleared
+
+// Reading back through the renderer, so this is the whole 2D path on the device rather than the texture
+// alone: a 3D pass's output, seen by the renderer without a copy.
+@test
+a_renderer_with_no_window_draws_a_gpu_textures_pixels()
+    val dev = test_device()
+    val renderer = offscreen_gpu_renderer(dev).unwrap()
+    val target = renderer.create_texture(PixelFormat.Argb8888, TextureAccess.Target, 2, 1).unwrap()
+    val color = cleared(dev, 1.0, 0.0, 0.0)
+    val view = gpu_texture_view(renderer, color, PixelFormat.Abgr8888).unwrap()
+
+    assert(gpu_renderer_device(renderer).is_some(), "the renderer says which device it is on")
+    assert(renderer.set_target(target), error())
+    renderer.copy(view)
+
+    val back = renderer.read_pixels().unwrap()
+
+    assert_eq(back.read_pixel(1, 0).unwrap().r, 255u8, "red, not swapped with blue")
+    assert_eq(back.read_pixel(1, 0).unwrap().b, 0u8, "no blue")
+    renderer.present()
+end a_renderer_with_no_window_draws_a_gpu_textures_pixels
+
+// Half-covering white over pure blue. `Blend` would multiply by the alpha a second time and give 64 in
+// red, so this result can only come from the premultiplied equation.
+@test
+premultiplied_pixels_composite_once()
+    val dev = test_device()
+    val renderer = offscreen_gpu_renderer(dev).unwrap()
+    val target = renderer.create_texture(PixelFormat.Argb8888, TextureAccess.Target, 2, 1).unwrap()
+    val under = gpu_texture_view(renderer, cleared(dev, 0.0, 0.0, 1.0), PixelFormat.Abgr8888).unwrap()
+    val over = renderer.create_texture(PixelFormat.Argb8888, TextureAccess.Streaming, 2, 1).unwrap()
+    val px = create_surface(2, 1, PixelFormat.Argb8888).unwrap()
+
+    px.write_pixel(0, 0, Color(128, 128, 128, 128))
+    px.write_pixel(1, 0, Color(0, 0, 0, 0))
+    over.update(px.pixels(), px.pitch())
+    assert(over.set_blend_mode(BlendMode.Premultiplied), error())
+    renderer.set_target(target)
+    renderer.copy(under)
+    renderer.copy(over)
+
+    val back = renderer.read_pixels().unwrap()
+    val soft = back.read_pixel(0, 0).unwrap()
+    val hole = back.read_pixel(1, 0).unwrap()
+
+    assert_eq(soft.r, 128u8, "the half-covered red is the source's own")
+    assert_eq(soft.b, 255u8, "and blue is the source's plus the rest of what was under it")
+    assert_eq(hole.r, 0u8, "nothing over the hole")
+    assert_eq(hole.b, 255u8, "so what was under it shows")
+    renderer.present()
+end premultiplied_pixels_composite_once
+
+@test
+a_surface_converts_between_formats()
+    assert(headless(), "SDL starts headless: " + error())
+
+    val s = create_surface(1, 1, PixelFormat.Abgr8888).unwrap()
+
+    s.write_pixel(0, 0, Color(10, 20, 30, 40))
+
+    val out = s.convert(PixelFormat.Argb8888).unwrap()
+
+    assert(out.format() == PixelFormat.Argb8888, "the format asked for")
+    assert_eq(out.pixels()[0], 30u8, "ARGB is blue first in memory")
+    assert_eq(out.read_pixel(0, 0).unwrap().a, 40u8, "and the alpha survives")
+end a_surface_converts_between_formats
+
+@test
+the_premultiplied_blend_mode_is_sdls()
+    assert_eq(BlendMode.Premultiplied.code(), 16u32, "SDL_BLENDMODE_BLEND_PREMULTIPLIED")

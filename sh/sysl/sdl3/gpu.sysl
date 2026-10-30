@@ -259,6 +259,37 @@ create_gpu_renderer(window: &Window, device: &GpuDevice) -> Option[&Renderer]
     if r == null then None else Some(Renderer(r))
 end create_gpu_renderer
 
+// A 2D renderer on a GPU device with no window at all: it draws into a `TextureAccess.Target` texture
+// chosen with `set_target`, which is what lets a composite be tested without opening anything.
+offscreen_gpu_renderer(device: &GpuDevice) -> Option[&Renderer]
+    val r = c.create_gpu_renderer(device.handle, null)
+
+    if r == null then None else Some(Renderer(r))
+end offscreen_gpu_renderer
+
+// A renderer's view of a texture this device made, so a 3D pass's output can be drawn by the 2D
+// renderer without copying it. `format` is the `PixelFormat` naming the same bytes as the GPU
+// texture's format: `Abgr8888` on a little-endian machine for `GPU_TEXTUREFORMAT_R8G8B8A8_UNORM`.
+//
+// **The view does not own the GPU texture.** Keep `texture` alive for as long as the view, and drop the
+// view first. The texture needs `GPU_TEXTUREUSAGE_SAMPLER`.
+gpu_texture_view(renderer: &Renderer, texture: &GpuTexture, format: PixelFormat) -> Option[&Texture]
+    val props = create_properties()
+
+    if props == 0 then return None
+
+    set_number_property(props, "SDL.texture.create.format", i64(format.code()))
+    set_number_property(props, "SDL.texture.create.access", i64(TextureAccess.Static.code()))
+    set_number_property(props, "SDL.texture.create.width", i64(texture.width))
+    set_number_property(props, "SDL.texture.create.height", i64(texture.height))
+    set_pointer_property(props, "SDL.texture.create.gpu.texture", ptr_cast(texture.handle))
+
+    val t = c.create_texture_with_properties(renderer.handle, props)
+
+    destroy_properties(props)
+    if t == null then None else Some(Texture(t))
+end gpu_texture_view
+
 // The GPU device behind a renderer made by `create_gpu_renderer`, or None for any other. **It is
 // borrowed: the renderer owns it**, so the answer must not outlive the renderer and is never
 // destroyed from here.
