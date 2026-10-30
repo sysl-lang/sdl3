@@ -10,7 +10,7 @@ on-screen keyboard, and the lifecycle events an app is stopped and restarted by.
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.15" }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.16" }
 }
 ```
 
@@ -544,7 +544,7 @@ SDL's queue, and `pumped` from `sh.sysl.kairos.pump` composes it with any kairos
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.15", features = [kairos] }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.16", features = [kairos] }
   kairos { git = "github.com/sysl-lang/kairos", version = "0.1.7" }
 }
 ```
