@@ -10,7 +10,7 @@ on-screen keyboard, and the lifecycle events an app is stopped and restarted by.
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.16" }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.17" }
 }
 ```
 
@@ -214,7 +214,8 @@ Each also has a `Display`, so a report says `window pixel size changed` rather t
 
 SDL takes a C function pointer, and a `*extern` cannot capture. So the closure APIs here —
 `add_event_watch`, `show_file_dialog` — keep the closure in module storage and hand SDL a single
-static trampoline that finds it again.
+static trampoline that finds it again. For a file dialog, the calls to reach for are the ones in
+[File dialogs](#file-dialogs), which never run a callback on SDL's thread.
 
 **A closure captures a plain local by copy** (`design/12 §7`), so a watch that counted into a `var`
 beside it would count into its own field and the caller would see nothing. Capturing a `&T` retains
@@ -228,6 +229,53 @@ val t: &Tally = Tally(0)
 
 add_event_watch(e -> if e.kind() == EventKind.Quit then t.n += 1)
 ```
+
+## File dialogs
+
+The system's own Open, Save and folder panels. Ask from the main thread and carry on; the answer
+comes back on the main thread, when the frame or event loop calls `deliver_dialogs`:
+
+```sysl
+ask_open_file((r) ->
+    r match
+        Chosen(paths) -> load(paths[0])
+        Cancelled -> ()
+        Failed(message) -> report(message),
+    Some(window), [FileFilter("Models", "obj;stl"), FileFilter("Everything", "*")], title = "Open")
+
+loop
+    handle_events()
+    deliver_dialogs()
+    draw()
+```
+
+`ask_open_file`, `ask_save_file` and `ask_open_folder` all answer a `DialogResult`: `Chosen(paths)`,
+never empty; `Cancelled`; or `Failed(message)`, SDL's text. Each callback runs exactly once, and a
+dialog that could not open answers `Failed` the same way, so there is nothing to check at the call.
+`examples/file-dialog` is a whole program.
+
+**Delivery is a locked queue, with a pushed event to wake the loop.** SDL's callback may run on a
+thread SDL made, and it returns before anything else could read the list it was given, so it copies
+the outcome into a `Mutex`-guarded inbox and pushes one event. The queue owns the strings, which a
+fixed-size C event could not without leaking them when nobody polls; the event ends a `wait_event`,
+which a queue alone could not. That event polls as `EventKind.Other`, a type of its own, and can be
+ignored. Only the outcome crosses: the closure stays on the main thread, so it is an ordinary `&Fn`
+and may capture anything, and it and the filter strings are held until the callback has run.
+
+**Pass the window.** With none, macOS runs the panel modally and the `ask_` call does not return until
+the user is done. Filters are advisory, as SDL says, so never assume a returned path matches one. On
+Android the paths are `content://` URIs.
+
+**Bound:** `SDL_ShowOpenFileDialog`, `SDL_ShowSaveFileDialog`, `SDL_ShowOpenFolderDialog` and
+`SDL_ShowFileDialogWithProperties` in `sh.sysl.sdl3.c`, with `SDL_DialogFileFilter` and
+`SDL_DialogFileCallback`'s shape. The `ask_` calls go through the properties form, because that is the
+one with a title and button labels. `show_file_dialog` and its three wrappers remain, for a caller
+that wants the callback at once on whichever thread SDL calls it.
+
+**Deliberately absent:** the callback's selected-filter index, which SDL documents as `-1` wherever a
+platform does not report it, so a program has to read the extension anyway; a way to cancel an open
+dialog, which SDL does not have; and a blocking "ask and wait" call, which would stop the frames the
+panel exists not to stop.
 
 ## The clock
 
@@ -544,7 +592,7 @@ SDL's queue, and `pumped` from `sh.sysl.kairos.pump` composes it with any kairos
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.16", features = [kairos] }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.17", features = [kairos] }
   kairos { git = "github.com/sysl-lang/kairos", version = "0.1.7" }
 }
 ```
@@ -667,10 +715,13 @@ cmd.submit()
 sysl test .
 ```
 
-Ninety-two tests, run headless against a real SDL3 — the dummy video and audio drivers create
+A hundred and twenty-four tests, run headless against a real SDL3 — the dummy video and audio drivers create
 windows, renderers, textures and devices and draw into memory, so nothing here needs a display or a
 sound card. `sysl test` on the package turns every feature on; `sysl test --no-default-features .`
-leaves the `kairos` feature off and runs the other seventy-five without fetching kairos. The pump's
+leaves the `kairos` feature off and runs the rest without fetching kairos. No test opens a file
+dialog's panel: `dialog_tests.sysl` calls the function SDL calls, with SDL's lists, from a second
+thread as well as the first, and one test builds `examples/file-dialog`, so `sysl` has to be on the
+`PATH` and the run has to start at the repository's root. The pump's
 fourteen need only SDL's events subsystem: a wake or an event pushed from a second thread ends a wait with no timeout, a kairos timer
 and an SDL event run in one loop over `pumped(host(), …)`, and the wake never reaches the sink.
 

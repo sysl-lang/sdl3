@@ -5,6 +5,7 @@ import sysl.raw.ptr_cast
 import sysl.text.{CString, cstring, from_cstring}
 import sysl.slices.as_ptr
 import sysl.buf.{Buf, buf}
+import sysl.threads.Mutex
 
 // The system's own file chooser — a real Finder or Explorer panel, not something the program draws.
 //
@@ -19,6 +20,9 @@ import sysl.buf.{Buf, buf}
 //
 // Note what that `runModal` path means: **without a window the call blocks** until the user is
 // done, so a program drawing its own frames stops drawing them. Pass the window.
+//
+// That paragraph is about the `show_*` calls. The `ask_*` calls at the end of this file have no such
+// condition, whichever backend answers.
 //
 // **A dialog's callback and its filter list have to outlive the call that starts it**, since SDL
 // holds the filters by pointer and reads them when the panel opens. Both live in module storage
@@ -72,11 +76,10 @@ struct FileFilter
     pattern: string
 
 // One dialog that is up. Everything here exists to outlive `show_file_dialog`.
-struct Pending
+private[sdl3] struct Pending
     slot: i32
     callback: &Fn(DialogResult) -> unit
-    filters: []DialogFileFilter
-    strings: Buf[CString]
+    filters: FilterSet
 
 // The words SDL is handed as `userdata`. They are module storage, so their addresses are stable for
 // the life of the program — which is what lets a slot number cross into C and come back without
@@ -112,20 +115,53 @@ dialog_trampoline(ud: *u8, files: **u8, filter: i32)
 
     pending.remove(usize(found))
     slot_taken[usize(slot)] = false
+    d.callback(translate_files(files))
+end dialog_trampoline
 
-    if files == null
-        d.callback(Failed(error()))
-        return
+// What SDL's list means. `files` is valid only until the callback returns, and `from_cstring`
+// copies. **SDL's error text is per thread**, so this has to run on the thread SDL called back on.
+private[sdl3] translate_files(files: **u8) -> DialogResult
+    if files == null then return Failed(error())
 
     var paths: Buf[string] = buf()
     var k: usize = 0
 
     while files[k] != null
-        paths.push(from_cstring(files[k]).unwrap_or(""))
+        from_cstring(files[k]) match
+            Ok(p) -> paths.push(p)
+            Err(_) -> return Failed("the system answered a path that is not UTF-8")
+
         k += 1
 
-    if paths.len() == 0 then d.callback(Cancelled) else d.callback(Chosen(paths))
-end dialog_trampoline
+    if paths.len() == 0 then Cancelled else Chosen(paths)
+end translate_files
+
+// A filter list in the shape SDL reads, and the owner of everything in it. Each string is copied so
+// that it ends in a NUL whatever it was sliced from, and SDL keeps the pointer rather than copying
+// the array, so a dialog holds one of these until it has answered.
+private[sdl3] struct FilterSet
+    array: []DialogFileFilter
+    strings: Buf[CString]
+
+    // What SDL is handed: null for no filters, as it documents.
+    pointer(self) -> *DialogFileFilter = if self.array.len == 0 then null else as_ptr(self.array)
+end FilterSet
+
+private[sdl3] marshal_filters(filters: []const FileFilter) -> FilterSet
+    var strings: Buf[CString] = buf()
+    val empty = DialogFileFilter(null, null)
+    var array: []DialogFileFilter = if filters.len == 0 then no_filters else [empty; filters.len]
+
+    for i in 0..<filters.len
+        val n = cstring(filters[i].name)
+        val p = cstring(filters[i].pattern)
+
+        array[i] = DialogFileFilter(n.ptr, p.ptr)
+        strings.push(n)
+        strings.push(p)
+
+    FilterSet(array, strings)
+end marshal_filters
 
 private take_slot() -> i32
     for i in 0..<16usize
@@ -153,27 +189,23 @@ show_file_dialog(kind: FileDialogKind, callback: &Fn(DialogResult) -> unit,
 
     if slot < 0 then return false
 
-    // The filter strings are held as `CString`s for as long as the dialog is, because SDL does
-    // **not** copy the array — it keeps the pointer and reads it when the panel opens.
-    var strings: Buf[CString] = buf()
-    val empty = DialogFileFilter(null, null)
-    var cfilters: []DialogFileFilter = if filters.len == 0 then no_filters else [empty; filters.len]
+    val held = marshal_filters(filters)
 
-    for i in 0..<filters.len
-        val n = cstring(filters[i].name)
-        val p = cstring(filters[i].pattern)
+    pending.push(Pending(slot, callback, held))
+    start_dialog(kind, &dialog_trampoline, ptr_cast(&slot_words[usize(slot)]), window, held, location, many, title,
+        accept, cancel)
+    true
+end show_file_dialog
 
-        cfilters[i] = DialogFileFilter(n.ptr, p.ptr)
-        strings.push(n)
-        strings.push(p)
-
-    pending.push(Pending(slot, callback, cfilters, strings))
-
+// Hand SDL one dialog. `held` must outlive the answer: SDL keeps the array's address.
+private start_dialog(kind: FileDialogKind, answer: *extern(*u8, **u8, i32) -> unit, userdata: *u8,
+                     window: Option[&Window], held: FilterSet, location: string, many: bool, title: string,
+                     accept: string, cancel: string)
     val props = create_properties()
 
-    if filters.len > 0
-        set_pointer_property(props, "SDL.filedialog.filters", ptr_cast(as_ptr(cfilters)))
-        set_number_property(props, "SDL.filedialog.nfilters", i64(filters.len))
+    if held.array.len > 0
+        set_pointer_property(props, "SDL.filedialog.filters", ptr_cast(held.pointer()))
+        set_number_property(props, "SDL.filedialog.nfilters", i64(held.array.len))
 
     window match
         Some(w) -> set_pointer_property(props, "SDL.filedialog.window", ptr_cast(w.handle))
@@ -185,14 +217,12 @@ show_file_dialog(kind: FileDialogKind, callback: &Fn(DialogResult) -> unit,
     if accept != "" then set_string_property(props, "SDL.filedialog.accept", accept)
     if cancel != "" then set_string_property(props, "SDL.filedialog.cancel", cancel)
 
-    c.show_file_dialog_with_properties(kind.code(), &dialog_trampoline,
-        ptr_cast(&slot_words[usize(slot)]), props)
+    c.show_file_dialog_with_properties(kind.code(), answer, userdata, props)
 
     // The properties are read synchronously — SDL's own convenience wrappers destroy the set the
     // moment this returns — so the bag goes here while the filters array it points at does not.
     destroy_properties(props)
-    true
-end show_file_dialog
+end start_dialog
 
 // Ask the user to pick an existing file, or several with `many`.
 show_open_file_dialog(callback: &Fn(DialogResult) -> unit, window: Option[&Window] = None,
@@ -216,3 +246,153 @@ show_open_folder_dialog(callback: &Fn(DialogResult) -> unit, window: Option[&Win
 // How many dialogs are up. Zero after every callback has run, which is the "nothing was stranded"
 // invariant `tests.sysl` checks.
 dialogs_pending() -> usize = pending.len()
+
+// ## Asking from the main thread, and being answered on it
+//
+// The `show_*` calls above run the callback wherever SDL does. The `ask_*` calls below run it where
+// the application calls `deliver_dialogs`, once a frame or once round its event loop, so that nothing
+// an application writes has to think about threads:
+//
+//     ask_open_file(r -> load(r), Some(window), [FileFilter("Models", "obj;stl")])
+//
+//     loop
+//         drain_events()
+//         deliver_dialogs()
+//         draw()
+//
+// **Only the outcome crosses.** SDL's callback may run on a thread SDL made, so it touches nothing but
+// the inbox: the closure and the filter storage stay in `asked`, which only the main thread reads, and
+// `userdata` is used as a number rather than followed. That is why the closure here is an ordinary
+// `&Fn`, free to capture what it likes.
+//
+// **The outcome is built, and let go of, under the inbox's lock**, because its strings and `Buf`s are
+// counted non-atomically: a handle dropped after the unlock could race the main thread taking it out.
+// The main thread takes out copies, and frees the originals, under that same lock.
+//
+// **A pushed event wakes the application, and carries nothing.** A queue alone would strand a loop
+// asleep in `wait_event`, and an event alone cannot own the strings, being a fixed-size C struct that
+// an application which stops polling would leak. The event is a type `register_events` reserved, so
+// it polls as `EventKind.Other` and an application may ignore it.
+private[sdl3] struct Asked
+    callback: &Fn(DialogResult) -> unit
+    filters: FilterSet
+
+    // The number SDL carries as `userdata` and the answer comes back under. A `&T` does not move, and
+    // this box stays in `asked` until its answer is delivered, so no two live requests share one.
+    who(&self) -> usize = usize(&*self)
+end Asked
+
+private[sdl3] struct Landed
+    who: usize
+    result: DialogResult
+
+private var asked: Buf[&Asked] = buf()
+private var inbox: Mutex[Buf[Landed]] = Mutex.new(buf())
+
+// Written once on the main thread before any dialog starts, and only read after that. Zero means SDL
+// had no event type left, and a frame loop still finds its answers.
+private var wake_kind: u32 = 0
+
+// The one function pointer SDL holds for an `ask_*` dialog, on whichever thread SDL calls it.
+file_dialog_answered(ud: *u8, files: **u8, filter: i32)
+    val who = usize(ud)
+
+    inbox.with((q) -> q.push(Landed(who, translate_files(files))))
+
+    if wake_kind != 0 then push_event(user_event_of(wake_kind, 0))
+end file_dialog_answered
+
+// Every answer waiting in the inbox, as copies the caller owns. The originals go under the lock.
+private take_landed() -> Buf[Landed] = inbox.with((q) ->
+    var out: Buf[Landed] = buf()
+
+    for i in 0..<q.len()
+        val who = q[i].who
+
+        q[i].result match
+            Cancelled -> out.push(Landed(who, Cancelled))
+            Failed(m) -> out.push(Landed(who, Failed(m.copy())))
+            Chosen(paths) ->
+                var fresh: Buf[string] = buf()
+
+                for k in 0..<paths.len()
+                    fresh.push(paths[k].copy())
+
+                out.push(Landed(who, Chosen(fresh)))
+
+    q.clear()
+    out)
+
+// Register a request. Its storage is held from here until `deliver_dialogs` runs its callback.
+private[sdl3] enlist(callback: &Fn(DialogResult) -> unit, filters: []const FileFilter) -> &Asked
+    if wake_kind == 0
+        // SDL hands out registered types from `EVENT_USER` upward, so the first range a process
+        // reserves is the type `user_event` pushes. An application would mistake that for its own.
+        var kind = register_events(1)
+
+        if kind == Some(EVENT_USER) then kind = register_events(1)
+
+        wake_kind = kind.unwrap_or(0)
+
+    val a: &Asked = Asked(callback, marshal_filters(filters))
+
+    asked.push(a)
+    a
+end enlist
+
+private ask(kind: FileDialogKind, callback: &Fn(DialogResult) -> unit, window: Option[&Window],
+            filters: []const FileFilter, location: string, many: bool, title: string, accept: string, cancel: string)
+    val a = enlist(callback, filters)
+
+    start_dialog(kind, &file_dialog_answered, ptr_cast(a.who()), window, a.filters, location, many, title, accept,
+        cancel)
+end ask
+
+// Ask the user to pick an existing file, or several with `many`, and return at once. `callback` runs
+// exactly once, inside a later `deliver_dialogs`, with what the user chose, that they cancelled, or
+// what went wrong; a dialog that could not even open answers `Failed` the same way.
+//
+// Call this and `deliver_dialogs` on the main thread. Everything after `window` is a hint a platform
+// may ignore, as on `show_file_dialog`. **Pass the window**: without one, macOS runs the panel modally
+// and this call does not return until the user is done.
+ask_open_file(callback: &Fn(DialogResult) -> unit, window: Option[&Window] = None,
+              filters: []const FileFilter = [], location: string = "", many: bool = false, title: string = "", accept: string = "",
+              cancel: string = "") =
+    ask(OpenFile, callback, window, filters, location, many, title, accept, cancel)
+
+// Ask the user to name a file to write. The path need not exist, and the panel does the "already
+// exists — overwrite?" prompt itself.
+ask_save_file(callback: &Fn(DialogResult) -> unit, window: Option[&Window] = None,
+              filters: []const FileFilter = [], location: string = "", title: string = "", accept: string = "", cancel: string = "") =
+    ask(SaveFile, callback, window, filters, location, false, title, accept, cancel)
+
+// Ask the user to pick a folder, or several with `many`. Filters do not apply.
+ask_open_folder(callback: &Fn(DialogResult) -> unit, window: Option[&Window] = None, location: string = "",
+                many: bool = false, title: string = "", accept: string = "", cancel: string = "") =
+    ask(OpenFolder, callback, window, [], location, many, title, accept, cancel)
+
+// Run the callback of every dialog that has answered, in the order they answered, on the calling
+// thread, and say how many ran. A callback may ask for another dialog; that one is delivered by a
+// later call.
+deliver_dialogs() -> int
+    val landed = take_landed()
+    var ran = 0
+
+    for i in 0..<landed.len()
+        for k in 0..<asked.len()
+            if asked[k].who() == landed[i].who
+                val a = asked[k]
+
+                asked.remove(k)
+                a.callback(landed[i].result)
+                ran += 1
+                break
+
+    ran
+end deliver_dialogs
+
+// How many answers have landed and not been taken out.
+private[sdl3] answers_waiting() -> usize = inbox.with((q) -> q.len())
+
+// How many asked-for dialogs have not yet had their callback run.
+dialogs_waiting() -> usize = asked.len()

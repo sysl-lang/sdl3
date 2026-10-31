@@ -3,11 +3,11 @@
 // This is the block a consumer writes to reach this package:
 //
 //     dependencies {
-//       sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.16" }
+//       sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.17" }
 //     }
 //
 // The coordinate is identity rather than a URL, so it carries no `https://`, and the version is the
-// tag `v0.3.16` on this repository.
+// tag `v0.3.17` on this repository.
 //
 // **SDL3 has to be installed, and so do its headers.** Nothing is vendored here: SDL is a large C
 // project with its own build system and its own platform backends, and a package that carried it
@@ -36,12 +36,13 @@
 
 package {
   name    = "sdl3"
-  version = "0.3.16"
+  version = "0.3.17"
 
   // **The oldest compiler this builds with, and it is a released one.** The raw-form imports
   // (`sysl.raw.ptr_cast`) and the manifest's `sysl.hocon` name do not exist before 0.6.0, so an
-  // older compiler could not read this package at all.
-  sysl = "0.7.7"
+  // older compiler could not read this package at all. `dialog.sysl`'s copies out of a `Mutex` were
+  // checked against this release's rule for what leaves `with`, and against nothing older.
+  sysl = "0.8.6"
 }
 
 // **`posix`, because SDL is a hosted library.** It opens devices, starts threads, talks to a window
@@ -86,7 +87,7 @@ requires {
 // timers at once, and with it the `kairos` package. With it off, that module is empty and nothing
 // of kairos is fetched or built. It only adds.
 //
-//     sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.16", features = [kairos] }
+//     sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.17", features = [kairos] }
 features {
   kairos = [kairos]
 }

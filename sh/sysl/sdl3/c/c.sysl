@@ -504,6 +504,14 @@ extern "SDL_DisableScreenSaver" disable_screen_saver() -> bool
 
 // ## File dialogs
 
+extern "SDL_ShowOpenFileDialog" show_open_file_dialog(callback: *extern(*u8, **u8, i32) -> unit, userdata: *u8,
+                                                      window: *Window, filters: *DialogFileFilter, nfilters: i32,
+                                                      default_location: *u8, allow_many: bool)
+extern "SDL_ShowSaveFileDialog" show_save_file_dialog(callback: *extern(*u8, **u8, i32) -> unit, userdata: *u8,
+                                                      window: *Window, filters: *DialogFileFilter, nfilters: i32,
+                                                      default_location: *u8)
+extern "SDL_ShowOpenFolderDialog" show_open_folder_dialog(callback: *extern(*u8, **u8, i32) -> unit, userdata: *u8,
+                                                          window: *Window, default_location: *u8, allow_many: bool)
 extern "SDL_ShowFileDialogWithProperties" show_file_dialog_with_properties(kind: i32,
                                                                           callback: *extern(*u8, **u8, i32) -> unit,
                                                                           userdata: *u8, props: u32)

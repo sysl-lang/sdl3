@@ -1,0 +1,459 @@
+module sh.sysl.sdl3
+@tests
+
+import sh.sysl.sdl3.c
+import sysl.raw.{ptr_cast, str_cast}
+import sysl.slices.as_ptr
+import sysl.text.{CString, cstring, from_cstring}
+import sysl.buf.{Buf, buf}
+import sysl.threads.spawn
+import sysl.process
+
+// Everything about a file dialog except the system's own panel. A test calls the function SDL calls,
+// with the lists SDL documents, from the threads SDL might call it on; where SDL itself is wanted, a
+// dialog driver that does not exist makes it answer at once with a failure.
+
+private extern "SDL_SetError" sdl_set_error(fmt: *u8, ...) -> bool
+
+// SDL's error text for this thread. The text is used as the format, so it holds no `%`.
+private set_error_text(text: string)
+    val t = cstring(text)
+
+    sdl_set_error(t.ptr)
+
+private struct Seen
+    results: Buf[DialogResult]
+    main_thread: int
+
+private seen() -> &Seen = Seen(buf(), 0)
+
+// A callback that records what it was given, and whether it ran on the main thread.
+private recorder(s: &Seen) -> &Fn(DialogResult) -> unit = (r) ->
+    if is_main_thread() then s.main_thread += 1
+    s.results.push(r)
+
+private address(a: &Asked) -> *u8 = ptr_cast(a.who())
+
+// A null-terminated list the way SDL hands one over, over storage the caller keeps.
+private struct Paths
+    texts: Buf[CString]
+    list: []*u8
+
+    files(self) -> **u8 = &self.list[0]
+end Paths
+
+private paths_of(names: []const string) -> Paths
+    var texts: Buf[CString] = buf()
+    var list: []*u8 = [null; names.len + 1]
+
+    for i in 0..<names.len
+        val t = cstring(names[i])
+
+        list[i] = t.ptr
+        texts.push(t)
+
+    Paths(texts, list)
+end paths_of
+
+private is_cancelled(r: DialogResult) -> bool = r match
+    Cancelled -> true
+    _ -> false
+
+private failure_of(r: DialogResult) -> string = r match
+    Failed(m) -> m
+    _ -> "not a failure"
+
+private paths_in(r: DialogResult) -> Buf[string] = r match
+    Chosen(p) -> p
+    _ -> buf()
+
+// Whatever an earlier test in this process left behind.
+private settle()
+    deliver_dialogs()
+
+    loop
+        if poll_event().is_none() then return
+
+// ## What SDL's list means
+
+@test("a null list is a failure carrying SDL's own error text")
+a_null_list_is_a_failure()
+    assert(init(INIT_EVENTS), "SDL_Init")
+    settle()
+
+    val s = seen()
+    val a = enlist(recorder(s), [])
+
+    set_error_text("the panel broke")
+    file_dialog_answered(address(a), null, -1)
+    assert_eq(deliver_dialogs(), 1, "one answer")
+    assert_eq(s.results.len(), 1usize, "one callback")
+    assert_eq(failure_of(s.results[0]), "the panel broke", "SDL's text, read on the answering thread")
+    quit()
+
+@test("an empty list is a cancel, not a choice of nothing")
+an_empty_list_is_a_cancel()
+    assert(init(INIT_EVENTS), "SDL_Init")
+    settle()
+
+    val s = seen()
+    val a = enlist(recorder(s), [])
+    val none = paths_of([])
+
+    file_dialog_answered(address(a), none.files(), -1)
+    assert_eq(deliver_dialogs(), 1, "one answer")
+    assert(is_cancelled(s.results[0]), "cancelled")
+    quit()
+
+@test("one path is a choice of that path, copied before SDL frees it")
+one_path_is_a_choice()
+    assert(init(INIT_EVENTS), "SDL_Init")
+    settle()
+
+    val s = seen()
+    val a = enlist(recorder(s), [])
+    val one = paths_of(["/tmp/a b/модель.obj"])
+
+    file_dialog_answered(address(a), one.files(), 0)
+
+    // SDL frees the list as the callback returns, which here means overwriting it.
+    one.texts[0].bytes[1] = u8('X')
+    deliver_dialogs()
+
+    val got = paths_in(s.results[0])
+
+    assert_eq(got.len(), 1usize, "one path")
+    assert_eq(got[0], "/tmp/a b/модель.obj", "the bytes as they were when it answered")
+    quit()
+
+@test("several paths are all kept, in SDL's order")
+several_paths_are_all_kept()
+    assert(init(INIT_EVENTS), "SDL_Init")
+    settle()
+
+    val s = seen()
+    val a = enlist(recorder(s), [])
+    val three = paths_of(["/one", "/two", "/three"])
+
+    file_dialog_answered(address(a), three.files(), -1)
+    deliver_dialogs()
+
+    val got = paths_in(s.results[0])
+
+    assert_eq(got.len(), 3usize, "three paths")
+    assert_eq(got[0], "/one", "first")
+    assert_eq(got[1], "/two", "second")
+    assert_eq(got[2], "/three", "third")
+    quit()
+
+@test("a path that is not UTF-8 is a failure rather than an empty path")
+a_path_that_is_not_utf8_fails()
+    assert(init(INIT_EVENTS), "SDL_Init")
+    settle()
+
+    val s = seen()
+    val a = enlist(recorder(s), [])
+    val bad = paths_of(["/fine", "/xx"])
+
+    bad.texts[1].bytes[1] = 0xFF
+    file_dialog_answered(address(a), bad.files(), -1)
+    deliver_dialogs()
+    assert(failure_of(s.results[0]) != "not a failure", "failed")
+    assert_eq(paths_in(s.results[0]).len(), 0usize, "no partial list")
+    quit()
+
+// ## Filters
+
+@test("a filter list has one entry per filter, and each string ends where its slice does")
+filters_are_terminated_at_the_slice()
+    val longer = "Models and more;obj;stl;ply trailing"
+    val set = marshal_filters([FileFilter(longer[0..<6], longer[16..<27]), FileFilter("Everything", "*")])
+
+    assert_eq(set.array.len, 2usize, "two entries")
+    assert(set.pointer() != null, "and the pointer SDL reads")
+    assert_eq(set.pointer()[1].name, set.array[1].name, "at the array")
+    assert_eq(from_cstring(set.array[0].name).unwrap(), "Models", "a name, cut at the slice")
+    assert_eq(from_cstring(set.array[0].pattern).unwrap(), "obj;stl;ply", "several patterns, cut at the slice")
+    assert_eq(from_cstring(set.array[1].name).unwrap(), "Everything", "the second name")
+    assert_eq(from_cstring(set.array[1].pattern).unwrap(), "*", "the second pattern")
+
+@test("no filters is a null pointer, which is what SDL documents")
+no_filters_is_null()
+    val set = marshal_filters([])
+
+    assert_eq(set.array.len, 0usize, "none")
+    assert(set.pointer() == null, "null")
+
+@test("a filter's storage is the request's own, and outlives what the caller passed")
+filter_storage_outlives_the_caller()
+    assert(init(INIT_EVENTS), "SDL_Init")
+    settle()
+
+    val s = seen()
+    var name: Buf[u8] = buf()
+
+    name.extend("Images".bytes)
+
+    val a = enlist(recorder(s), [FileFilter(str_cast(name.view()), "png;jpg")])
+
+    name[0] = u8('X')
+    assert_eq(from_cstring(a.filters.array[0].name).unwrap(), "Images", "the request holds a copy")
+    assert_eq(dialogs_waiting(), 1usize, "and it waits")
+
+    file_dialog_answered(address(a), null, -1)
+    assert_eq(dialogs_waiting(), 1usize, "answered, but held until it is delivered")
+    deliver_dialogs()
+    assert_eq(dialogs_waiting(), 0usize, "delivered, and let go")
+    quit()
+
+// ## Delivery
+
+@test("nothing runs until deliver_dialogs, and then each callback runs once")
+a_callback_waits_for_deliver()
+    assert(init(INIT_EVENTS), "SDL_Init")
+    settle()
+
+    val s = seen()
+    val a = enlist(recorder(s), [])
+
+    assert_eq(deliver_dialogs(), 0, "no answer yet")
+    file_dialog_answered(address(a), paths_of(["/a"]).files(), -1)
+    assert_eq(s.results.len(), 0usize, "the answer alone runs nothing")
+    assert_eq(answers_waiting(), 1usize, "it is in the inbox")
+    assert_eq(deliver_dialogs(), 1, "delivered")
+    assert_eq(answers_waiting(), 0usize, "and the inbox let it go")
+    assert_eq(s.results.len(), 1usize, "once")
+    assert_eq(deliver_dialogs(), 0, "and never again")
+    assert_eq(s.results.len(), 1usize, "still once")
+    quit()
+
+@test("two requests answered out of order each reach their own callback")
+answers_reach_their_own_callback()
+    assert(init(INIT_EVENTS), "SDL_Init")
+    settle()
+
+    val first = seen()
+    val second = seen()
+    val a = enlist(recorder(first), [])
+    val b = enlist(recorder(second), [])
+
+    file_dialog_answered(address(b), paths_of(["/second"]).files(), -1)
+    file_dialog_answered(address(a), paths_of(["/first"]).files(), -1)
+    assert_eq(deliver_dialogs(), 2, "both")
+    assert_eq(paths_in(first.results[0])[0], "/first", "the first asked")
+    assert_eq(paths_in(second.results[0])[0], "/second", "the second asked")
+    quit()
+
+private struct Chain
+    next: &Seen
+    fired: bool
+
+@test("a callback may ask for another dialog, which a later call delivers")
+a_callback_may_ask_again()
+    assert(init(INIT_EVENTS), "SDL_Init")
+    set_hint(HINT_FILE_DIALOG_DRIVER, "no-such-backend")
+    settle()
+
+    val chain: &Chain = Chain(seen(), false)
+    val a = enlist((r) ->
+        chain.fired = true
+        ask_open_folder(recorder(chain.next)), [])
+
+    file_dialog_answered(address(a), null, -1)
+    assert_eq(deliver_dialogs(), 1, "the first")
+    assert(chain.fired, "fired")
+    assert_eq(chain.next.results.len(), 0usize, "the second has not run")
+    assert_eq(dialogs_waiting(), 1usize, "and is waiting")
+    assert_eq(deliver_dialogs(), 1, "the second")
+    assert(failure_of(chain.next.results[0]) != "not a failure", "with SDL's failure")
+    reset_hint(HINT_FILE_DIALOG_DRIVER)
+    quit()
+
+// What a thread of SDL's does.
+private struct Answerer
+    userdata: *u8
+    files: **u8
+    on_main: bool
+
+private answer(s: *Answerer) -> unit
+    s.on_main = is_main_thread()
+    file_dialog_answered(s.userdata, s.files, -1)
+
+@test("an answer from another thread is delivered on the main thread")
+another_thread_reaches_the_main_side()
+    assert(init(INIT_EVENTS), "SDL_Init")
+    settle()
+
+    val s = seen()
+    val a = enlist(recorder(s), [])
+    val two = paths_of(["/x", "/y"])
+    var job = Answerer(address(a), two.files(), true)
+    val t = spawn(&answer, &job).expect("a thread")
+
+    t.join()
+    assert(!job.on_main, "SDL's thread was not the main one")
+    assert_eq(s.results.len(), 0usize, "that thread ran no callback")
+    assert_eq(deliver_dialogs(), 1, "the main side took it")
+    assert_eq(s.main_thread, 1, "and ran the callback on the main thread")
+
+    val got = paths_in(s.results[0])
+
+    assert_eq(got.len(), 2usize, "with both paths")
+    assert_eq(got[1], "/y", "intact")
+    quit()
+
+@test("the error text read is the answering thread's, not the main thread's")
+another_thread_failure_reads_its_own_error()
+    assert(init(INIT_EVENTS), "SDL_Init")
+    settle()
+
+    val s = seen()
+    val a = enlist(recorder(s), [])
+
+    set_error_text("the main thread's error")
+
+    var job = Answerer(address(a), null, true)
+
+    spawn(&answer, &job).expect("a thread").join()
+    deliver_dialogs()
+
+    val text = failure_of(s.results[0])
+
+    assert(text != "not a failure", "a failure")
+    assert(text != "the main thread's error", "not the error of a thread that did not fail")
+    quit()
+
+@test("an answer from another thread wakes a loop asleep in SDL's queue")
+another_thread_wakes_the_loop()
+    assert(init(INIT_EVENTS), "SDL_Init")
+    settle()
+
+    val s = seen()
+    val a = enlist(recorder(s), [])
+    val one = paths_of(["/x"])
+    var job = Answerer(address(a), one.files(), true)
+    val t = spawn(&answer, &job).expect("a thread")
+    val woke = wait_event_timeout(10000)
+
+    t.join()
+    assert(woke.is_some(), "the wait ended")
+
+    woke.unwrap().kind() match
+        EventKind.Other(_) -> ()
+        _ -> assert(false, "a type of its own, so an application's own user events are not mistaken for it")
+
+    assert_eq(deliver_dialogs(), 1, "and the answer is there to deliver")
+    quit()
+
+// Many threads at once, with the main thread taking answers out while they arrive.
+private struct Burst
+    userdata: **u8
+    from: usize
+    to: usize
+    files: **u8
+
+private burst(s: *Burst) -> unit
+    for i in s.from..<s.to
+        file_dialog_answered(s.userdata[i], s.files, -1)
+
+@test("answers arriving from several threads while the main thread delivers all land, once each")
+answers_survive_concurrent_delivery()
+    assert(init(INIT_EVENTS), "SDL_Init")
+    settle()
+
+    val s = seen()
+    val each = 50usize
+    val threads = 4usize
+    var keys: []*u8 = [null; each * threads]
+
+    for i in 0..<keys.len
+        keys[i] = address(enlist(recorder(s), []))
+
+    val pair = paths_of(["/first", "/second"])
+    var jobs: [4]Burst = [Burst(as_ptr(keys), 0, 0, pair.files()); 4]
+
+    for i in 0..<threads
+        jobs[i] = Burst(as_ptr(keys), i * each, (i + 1) * each, pair.files())
+
+    val a = spawn(&burst, &jobs[0]).expect("a thread")
+    val b = spawn(&burst, &jobs[1]).expect("a thread")
+    val d = spawn(&burst, &jobs[2]).expect("a thread")
+    val e = spawn(&burst, &jobs[3]).expect("a thread")
+    var ran = 0
+
+    while ran < int(keys.len)
+        ran += deliver_dialogs()
+
+    a.join()
+    b.join()
+    d.join()
+    e.join()
+    assert_eq(ran, int(keys.len), "every answer, once")
+    assert_eq(s.main_thread, ran, "all on the main thread")
+    assert_eq(dialogs_waiting(), 0usize, "nothing stranded")
+
+    for i in 0..<s.results.len()
+        assert_eq(paths_in(s.results[i])[1], "/second", "whole")
+
+    quit()
+
+// ## Through SDL itself
+
+@test("each ask reaches SDL and comes back as a failure when no driver will open")
+each_ask_reaches_sdl()
+    assert(init(INIT_EVENTS), "SDL_Init")
+    set_hint(HINT_FILE_DIALOG_DRIVER, "no-such-backend")
+    settle()
+
+    val s = seen()
+    val filters = [FileFilter("Images", "png;jpg"), FileFilter("Everything", "*")]
+
+    ask_open_file(recorder(s), None, filters, "/tmp/", true, "Pick", "Open", "Never mind")
+    ask_save_file(recorder(s), None, filters, "/tmp/name.png", "Save", "Save", "Never mind")
+    ask_open_folder(recorder(s), None, "/tmp/", true, "Pick", "Open", "Never mind")
+    assert_eq(s.results.len(), 0usize, "even an answer SDL gives at once waits for the loop")
+    assert_eq(dialogs_waiting(), 3usize, "three held")
+    assert_eq(deliver_dialogs(), 3, "three answered")
+
+    for i in 0..<3usize
+        assert(failure_of(s.results[i]).len > 0, "SDL's error says why")
+        assert(failure_of(s.results[i]) != "not a failure", "a failure")
+
+    reset_hint(HINT_FILE_DIALOG_DRIVER)
+    quit()
+
+@test("the three direct calls and the filter struct reach SDL's callback")
+the_direct_calls_reach_the_callback()
+    assert(init(INIT_EVENTS), "SDL_Init")
+    set_hint(HINT_FILE_DIALOG_DRIVER, "no-such-backend")
+    settle()
+
+    val s = seen()
+    val a = enlist(recorder(s), [FileFilter("Images", "png;jpg")])
+    val b = enlist(recorder(s), [FileFilter("Images", "png;jpg")])
+    val d = enlist(recorder(s), [])
+
+    c.show_open_file_dialog(&file_dialog_answered, address(a), null, a.filters.pointer(), i32(a.filters.array.len), null,
+        false)
+    c.show_save_file_dialog(&file_dialog_answered, address(b), null, b.filters.pointer(), i32(b.filters.array.len), null)
+    c.show_open_folder_dialog(&file_dialog_answered, address(d), null, null, false)
+    assert_eq(deliver_dialogs(), 3, "each called back")
+
+    for i in 0..<3usize
+        assert(failure_of(s.results[i]) != "not a failure", "with a failure")
+
+    reset_hint(HINT_FILE_DIALOG_DRIVER)
+    quit()
+
+// ## The example
+
+@test("the example program builds")
+the_example_builds()
+    val binary = f"/tmp/sysl-sdl3-file-dialog-${process.pid()}"
+    val out = process.capture("sysl", ["build", ".", "--lib", "../..", "-o", binary], "examples/file-dialog")
+
+    out match
+        Ok(o) ->
+            assert(o.status.ok(), f"sysl build of examples/file-dialog: ${o.err.unwrap_or(o.text)}")
+            _ = process.capture("/bin/rm", ["-f", binary])
+        Err(_) -> assert(false, "sysl could not be started")

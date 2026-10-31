@@ -1,0 +1,31 @@
+// Opens a small window, asks for a file through the system's own panel, prints the answer and exits.
+//
+// It runs until a person answers the panel. Setting `SDL_FILE_DIALOG_DRIVER=none` makes the dialog
+// fail at once, which shows the failure path with nobody there.
+
+import sh.sysl.sdl3.*
+
+struct Waiting
+    done: bool
+
+show(r: DialogResult)
+    r match
+        Chosen(paths) -> for i in 0..<paths.len() do print(f"chosen: ${paths[i]}")
+        Cancelled -> print("cancelled")
+        Failed(message) -> print(f"failed: $message")
+
+init()
+
+val window = create_window("File dialog", 480, 240).expect("a window")
+val filters = [FileFilter("Models", "obj;stl"), FileFilter("Everything", "*")]
+val waiting: &Waiting = Waiting(false)
+
+ask_open_file((r) ->
+    show(r)
+    waiting.done = true, Some(window), filters, title = "Pick a model")
+
+while !waiting.done
+    wait_event_timeout(100)
+    deliver_dialogs()
+
+quit()
