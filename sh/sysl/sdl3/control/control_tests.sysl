@@ -909,33 +909,62 @@ a_request_split_across_frames_is_answered()
     control.close()
     remove_dir_all(dir).unwrap()
 
+private struct Tally
+    n: int
+
 @test
-a_body_arriving_over_many_frames_stays_inside_the_read_budget()
+one_frame_reads_at_most_its_budget_and_the_next_reads_the_rest()
     up()
 
     val (dir, at) = socket_in("a.sock")
-    val control = listen(at, None, instant()).unwrap()
-    val cl = connect(at)
-    val body = "text=" + repeat("a", 500000)
-    val head = f"POST /wait HTTP/1.1\r\nContent-Length: ${body.len}\r\n\r\n"
-    var clock: long = 0
-    var sent: usize = 0
-    var polls = 0
-    val whole = (head + body + "&frames=0").bytes
+    val control = listen(at).unwrap()
+    val tally: &Tally = Tally(0)
+    var clients: Buf[&Client] = buf()
 
-    // The Content-Length is short of the tail on purpose: only what it counts belongs to the request.
-    while sent < head.len + body.len
-        cl.socket.send(whole[sent..<head.len + body.len]) match
-            Ok(n) -> sent += n
-            Err(e) -> assert(would_block(e))
+    control.route((req) ->
+        tally.n += 1
+        Some(text(200, "seen")))
 
-        clock += 1
-        control.poll_at(clock)
-        polls += 1
+    // Sixteen requests of 6 KB, each small enough to sit whole in its socket's buffer.
+    for _ in 0..<16
+        clients.push(request(at, "POST", "/count", repeat("x", 6000)))
 
-        assert(polls < 100000, "the request stopped moving")
+    control.poll_at(1)
+    assert(tally.n >= 10 && tally.n <= 11, f"64 KB holds ten or eleven of them, not ${tally.n}")
 
-    assert(polls >= 7, f"half a megabyte at 64 KB a frame takes eight or so frames, not $polls")
+    control.poll_at(2)
+    assert_eq(tally.n, 16)
+
+    for i in 0..<16
+        var clock: long = 2 + long(i)
+
+        finish(control, clients.at(i), &clock)
+        assert_eq(status_of(clients.at(i)), 200)
+
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+a_client_done_with_its_answer_gives_up_its_place_at_once()
+    up()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at).unwrap()
+
+    // The clock stands still, so no deadline can be what frees them.
+    for _ in 0..<32
+        val cl = request(at, "GET", "/state")
+
+        for _ in 0..<4
+            control.poll_at(1)
+            drain(cl)
+
+            if cl.over then break
+
+        assert_eq(status_of(cl), 200)
+        cl.socket.close().unwrap()
+        control.poll_at(1)
+
     control.close()
     remove_dir_all(dir).unwrap()
 
@@ -1148,7 +1177,8 @@ a_shot_of_a_hidden_window_has_the_signature_the_size_and_the_pixels()
     up()
 
     val (dir, at) = socket_in("a.sock")
-    val window = create_window("shot", 48, 32, WINDOW_HIDDEN).unwrap()
+    // An odd width, so a row is shorter than the surface's pitch and walking it wrongly shows.
+    val window = create_window("shot", 47, 32, WINDOW_HIDDEN).unwrap()
     val renderer = window.create_renderer().unwrap()
     val control = listen(at, Some(window)).unwrap()
     val cl = request(at, "GET", "/shot")
@@ -1179,7 +1209,7 @@ a_shot_of_a_hidden_window_has_the_signature_the_size_and_the_pixels()
 
     val image = png.decode(file).unwrap()
 
-    assert_eq(image.width, 48usize)
+    assert_eq(image.width, 47usize)
     assert_eq(image.height, 32usize)
     assert_rgb(image.at(0, 0), 10, 20, 30, "the background")
     assert_rgb(image.at(8, 4), 200, 100, 50, "the rectangle's first corner")
