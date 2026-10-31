@@ -1,0 +1,1397 @@
+module sh.sysl.sdl3.control
+@requires(posix)
+@tests
+
+// The socket end to end: `unix_connect` is the client, in this process, and the test drives the frame
+// poll itself, with a clock it steps. Headless, on SDL's dummy video driver, except where a test says.
+
+import sysl.buf.{Buf, buf}
+import sysl.encoding.json
+import sysl.fs.{exists, make_temp_dir, metadata, remove_dir_all, remove_file, symlink, write_text}
+import sysl.net.{Socket, unix, unix_connect, unix_listen, would_block}
+import sysl.path.join
+import sysl.process
+import sysl.text.{Search, from_utf8_lossy, repeat}
+import sh.sysl.png
+import sh.sysl.sdl3.{Color, Event, EventKind, HINT_VIDEO_DRIVER, INIT_VIDEO, KMOD_LCTRL, KMOD_LSHIFT, MouseButton, SCANCODE_A, SCANCODE_LCTRL, SCANCODE_LSHIFT, SCANCODE_RETURN, WINDOW_HIDDEN, Window, create_window, init, key_name, mod_state, poll_event, quit, set_hint}
+
+private up() = assert(begin(), "SDL came up headless")
+
+private begin() -> bool
+    set_hint(HINT_VIDEO_DRIVER, "dummy")
+    init(INIT_VIDEO)
+end begin
+
+private empty_queue()
+    loop
+        if poll_event().is_none() then return
+
+// The events waiting, in order. Copies of the kinds a test reads.
+private events() -> Buf[Event]
+    var out: Buf[Event] = buf()
+
+    loop
+        poll_event() match
+            Some(e) -> out.push(e)
+            None -> return out
+end events
+
+private socket_in(name: string) -> (string, string)
+    val dir = make_temp_dir("ctl-").unwrap()
+
+    (dir, join(dir, name))
+end socket_in
+
+// A pace of nothing, so the tests below count frames unless they are about time.
+private instant() -> Options = Options(0, 0, 0)
+
+// A client on the same thread as the poll: it sends, and a frame goes by between each look at the socket.
+private struct Client
+    socket: Socket
+    got: Buf[u8]
+    over: bool
+
+private connect(at: string) -> &Client
+    var s = unix_connect(unix(at).unwrap()).unwrap()
+
+    s.non_blocking().unwrap()
+
+    Client(s, buf(), false)
+end connect
+
+private drain(cl: &Client)
+    var into: []u8 = [0; 65536]
+
+    loop
+        cl.socket.recv(into) match
+            Ok(n) ->
+                if n == 0
+                    cl.over = true
+                    return
+
+                cl.got.extend(into[0..<n])
+            Err(e) ->
+                if !would_block(e) then cl.over = true
+
+                return
+end drain
+
+private request(at: string, method: string, target: string, body: string = "") -> &Client
+    val cl = connect(at)
+
+    cl.socket.send_all(f"$method $target HTTP/1.1\r\nHost: app\r\nContent-Length: ${body.len}\r\n\r\n$body".bytes).unwrap()
+    cl
+end request
+
+// Poll until the client has its whole answer, stepping the clock. Traps rather than hangs.
+private finish(control: &Control, cl: &Client, clock: *long)
+    for _ in 0..<200000
+        *clock += 1
+        control.poll_at(*clock)
+        drain(cl)
+
+        if cl.over
+            _ = cl.socket.close()
+            return
+
+    panic("no answer came")
+end finish
+
+private status_of(cl: &Client) -> int
+    val head = from_utf8_lossy(cl.got.view())
+
+    if head.len < 12 then return 0
+
+    process_status(head[9..<12])
+end status_of
+
+private process_status(s: string) -> int = sysl.text.parse_int(s).unwrap_or(0)
+
+private body_of(cl: &Client) -> []u8
+    val at = cl.got.view().index_of("\r\n\r\n".bytes).unwrap()
+
+    cl.got.view()[at + 4..<cl.got.len()]
+end body_of
+
+private body_text(cl: &Client) -> string = from_utf8_lossy(body_of(cl))
+
+private ask(control: &Control, clock: *long, method: string, target: string, body: string = "") -> &Client
+    val cl = request(control.path(), method, target, body)
+
+    finish(control, cl, clock)
+    cl
+end ask
+
+private assert_rgb(p: png.Rgba, r: u8, g: u8, b: u8, what: string)
+    assert_eq(p.r, r, what)
+    assert_eq(p.g, g, what)
+    assert_eq(p.b, b, what)
+    assert_eq(p.a, 255u8, what)
+end assert_rgb
+
+// A request too long for one send to a non-blocking socket: frames go by while it goes in.
+private ask_long(control: &Control, clock: *long, target: string, body: string) -> &Client
+    val cl = connect(control.path())
+    val whole = f"POST $target HTTP/1.1\r\nContent-Length: ${body.len}\r\n\r\n$body".bytes
+    var sent: usize = 0
+
+    while sent < whole.len
+        cl.socket.send(whole[sent..<whole.len]) match
+            Ok(n) -> sent += n
+            Err(e) -> assert(would_block(e))
+
+        *clock += 1
+        control.poll_at(*clock)
+
+    finish(control, cl, clock)
+    cl
+end ask_long
+
+// ## The socket file
+
+@test
+the_socket_is_owner_only_and_gone_after_close()
+    up()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at).unwrap()
+
+    assert_eq(metadata(at).unwrap().permissions(), u32(0o600), "owner only")
+    assert(!exists(at + ".d"), "the private directory it was made in has gone")
+
+    control.close()
+
+    assert(!exists(at), "and the file goes with it")
+    control.close()
+    control.poll_at(1)
+    remove_dir_all(dir).unwrap()
+
+@test
+going_out_of_scope_closes_it_too()
+    val (dir, at) = socket_in("a.sock")
+
+    listen_and_forget(at)
+    assert(!exists(at))
+    remove_dir_all(dir).unwrap()
+
+private listen_and_forget(at: string)
+    val control = listen(at).unwrap()
+
+    assert(exists(control.path()))
+end listen_and_forget
+
+@test
+a_stale_socket_is_replaced()
+    up()
+
+    val (dir, at) = socket_in("a.sock")
+    var dead = unix_listen(unix(at).unwrap()).unwrap()
+
+    dead.close().unwrap()
+    assert(exists(at), "the dead program's file is still there")
+
+    val control = listen(at).unwrap()
+    var clock: long = 0
+
+    assert_eq(status_of(ask(control, &clock, "GET", "/state")), 200)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+a_live_socket_is_not_taken()
+    val (dir, at) = socket_in("a.sock")
+    val first = listen(at).unwrap()
+
+    listen(at) match
+        Err(InUse(p)) -> assert_eq(p, at)
+        _ -> panic("a second listener took the socket")
+
+    assert(exists(at), "and the first one still has its file")
+    first.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+something_that_is_not_a_socket_is_not_replaced()
+    val (dir, at) = socket_in("a.sock")
+
+    write_text(at, "precious").unwrap()
+
+    listen(at) match
+        Err(NotASocket(_)) -> ()
+        _ -> panic("a regular file was replaced")
+
+    assert(sysl.fs.read_text(at).unwrap() == "precious")
+
+    val link = join(dir, "link.sock")
+
+    symlink(at, link).unwrap()
+
+    listen(link) match
+        Err(NotASocket(_)) -> ()
+        _ -> panic("a symbolic link was followed")
+
+    remove_dir_all(dir).unwrap()
+
+@test
+a_path_too_long_is_an_error_and_leaves_nothing()
+    val (dir, _) = socket_in("x")
+    val at = join(dir, repeat("n", 200))
+
+    assert(listen(at).is_err())
+    assert(!exists(at))
+    remove_dir_all(dir).unwrap()
+
+@test
+a_directory_that_is_not_there_is_an_error()
+    assert(listen("/nonexistent-control-dir/a.sock").is_err())
+
+// ## Commands: what comes out of the SDL queue
+
+@test
+a_click_comes_out_as_a_move_a_press_and_a_release_each_in_its_own_frame()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val window = create_window("c", 320, 200, WINDOW_HIDDEN).unwrap()
+    val control = listen(at, Some(window), instant()).unwrap()
+    val cl = request(at, "POST", "/click", "x=40.5&y=20&button=right")
+
+    empty_queue()
+    assert(!control.pointer().seen, "nobody has moved it yet")
+
+    control.poll_at(1)
+
+    val moved = events()
+
+    assert_eq(moved.len(), 1usize, "the first frame has the move alone")
+    assert_eq(moved.at(0).kind(), EventKind.MouseMotion)
+    assert_eq(moved.at(0).mouse_x(), 40.5f32)
+    assert_eq(moved.at(0).mouse_y(), 20.0f32)
+    assert_eq(moved.at(0).window_id(), window.id())
+    assert_eq(moved.at(0).mouse_which(), 1u32)
+    assert_eq(moved.at(0).mouse_held(), 0u32, "nothing is held yet")
+    assert(control.pointer().seen)
+    assert_eq(control.pointer().x, 40.5f32)
+    assert(!control.pointer().down)
+
+    control.poll_at(2)
+
+    val pressed = events()
+
+    assert_eq(pressed.len(), 1usize)
+    assert_eq(pressed.at(0).kind(), EventKind.MouseButtonDown)
+    assert_eq(pressed.at(0).mouse_button(), MouseButton.Right)
+    assert_eq(pressed.at(0).mouse_clicks(), 1u8)
+    assert_eq(pressed.at(0).mouse_x(), 40.5f32)
+    assert(control.pointer().down, "the pointer says so while it is")
+    assert_eq(control.pointer().button, MouseButton.Right)
+    assert(control.active())
+
+    drain(cl)
+    assert_eq(cl.got.len(), 0usize, "and no answer until it is over")
+
+    control.poll_at(3)
+
+    val released = events()
+
+    assert_eq(released.len(), 1usize)
+    assert_eq(released.at(0).kind(), EventKind.MouseButtonUp)
+    assert_eq(released.at(0).mouse_button(), MouseButton.Right)
+    assert(!control.pointer().down)
+    assert(!control.active())
+
+    var clock: long = 3
+
+    finish(control, cl, &clock)
+    assert_eq(status_of(cl), 200)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+clicks_two_is_a_double_click()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    var clock: long = 0
+
+    assert_eq(status_of(ask(control, &clock, "POST", "/click", "x=1&y=1&clicks=2")), 200)
+
+    val got = events()
+
+    assert_eq(got.len(), 5usize, "a move and two presses")
+    assert_eq(got.at(1).mouse_clicks(), 1u8)
+    assert_eq(got.at(3).kind(), EventKind.MouseButtonDown)
+    assert_eq(got.at(3).mouse_clicks(), 2u8)
+    assert_eq(got.at(4).mouse_clicks(), 2u8)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+bad_parameters_are_refused_and_nothing_goes_in()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    var clock: long = 0
+    val cases = [
+        ("/click", "y=1"), ("/click", "x=1"), ("/click", "x=a&y=1"), ("/click", "x=nan&y=1"), ("/click", "x=inf&y=1"),
+        ("/click", "x=1&y=1&button=nose"), ("/click", "x=1&y=1&clicks=0"), ("/click", "x=1&y=1&clicks=9"),
+        ("/drag", "to=1,1"), ("/drag", "from=1,1"), ("/drag", "from=1&to=1,1"), ("/drag", "from=1,1,1&to=1,1"),
+        ("/drag", "from=1,1&to=1,1&duration=-1"), ("/drag", "from=1,1&to=1,1&duration=60001"), ("/drag", "from=1,1&to=1,1&duration=x"),
+        ("/key", ""), ("/key", "key=NoSuchKey"), ("/key", "key=a&mods=nose"),
+        ("/type", ""), ("/type", "text=%ff"), ("/type", "text=a%00b"), ("/type", "text=a&pace=-1"),
+        ("/wait", ""), ("/wait", "frames=-1"), ("/wait", "ms=x"),
+    ]
+
+    for i in 0..<cases.len
+        val (route_path, body) = cases[i]
+        val cl = ask(control, &clock, "POST", route_path, body)
+
+        assert_eq(status_of(cl), 400, f"$route_path $body")
+        assert(body_text(cl).contains("\"error\""), "and it says why")
+
+    assert_eq(events().len(), 0usize)
+    assert(!control.active())
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+parameters_work_in_the_query_as_well()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    var clock: long = 0
+
+    assert_eq(status_of(ask(control, &clock, "POST", "/click?x=7&y=8")), 200)
+    assert_eq(events().at(0).mouse_x(), 7.0f32)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+a_drag_spreads_over_frames_at_the_pace_of_the_clock()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    val cl = request(at, "POST", "/drag", "from=100,50&to=200,250&duration=100")
+    var moves = 0
+    var pressed = false
+    var released = false
+    var last_x: f32 = 100
+    var sum_dy: f32 = 0
+    var now: long = 1000
+    var frames_held = 0
+
+    // A frame every 10 ms of the clock.
+    for _ in 0..<30
+        now += 10
+        control.poll_at(now)
+
+        val got = events()
+
+        assert(got.len() <= 1, "at most one event a frame")
+
+        if got.len() == 1
+            val e = got.at(0)
+
+            e.kind() match
+                EventKind.MouseButtonDown ->
+                    assert_eq(e.mouse_x(), 100.0f32, "the press is where the drag starts")
+                    pressed = true
+                EventKind.MouseButtonUp ->
+                    assert_eq(e.mouse_x(), 200.0f32, "the release is where it ends")
+                    assert_eq(e.mouse_y(), 250.0f32)
+                    released = true
+                EventKind.MouseMotion ->
+                    if pressed
+                        moves += 1
+                        assert(e.mouse_x() >= last_x, "it travels one way")
+                        assert_eq(e.mouse_held(), 1u32, "with the button held")
+                        assert(e.mouse_x() > 100 && e.mouse_x() <= 200)
+                        sum_dy += e.mouse_dy()
+                        last_x = e.mouse_x()
+                _ -> panic("an event nobody asked for")
+
+        if pressed && !released
+            frames_held += 1
+            assert(control.pointer().down)
+
+    assert(pressed && released)
+    assert(moves >= 8, f"100 ms at 10 ms a frame is about ten moves, not $moves")
+    assert_eq(last_x, 200.0f32, "and the last of them arrives exactly")
+    assert_eq(sum_dy, 200.0f32, "the relative motion adds up to the journey")
+
+    var clock = now
+
+    finish(control, cl, &clock)
+    assert_eq(status_of(cl), 200)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+a_slow_frame_rate_takes_longer_steps_and_the_same_time()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    val cl = request(at, "POST", "/drag", "from=0,0&to=100,0&duration=100")
+    var now: long = 0
+    var moves = 0
+
+    for _ in 0..<8
+        now += 40
+        control.poll_at(now)
+
+        val got = events()
+
+        if got.len() == 1 && got.at(0).kind() == EventKind.MouseMotion then moves += 1
+
+    assert(moves >= 2 && moves <= 4, f"40 ms a frame over 100 ms is three moves, near enough, not $moves")
+    assert_eq(control.pointer().x, 100.0f32)
+
+    var clock = now
+
+    finish(control, cl, &clock)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+a_drag_of_no_duration_still_gives_each_event_a_frame()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    val cl = request(at, "POST", "/drag", "from=1,1&to=9,9&duration=0")
+
+    for i in 0..<4
+        control.poll_at(1)
+
+        assert_eq(events().len(), 1usize, f"frame $i")
+
+    var clock: long = 1
+
+    finish(control, cl, &clock)
+    assert_eq(events().len(), 0usize)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+the_pointer_travels_to_a_click_at_the_approach_pace()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, Options(100, 0, 0)).unwrap()
+    var clock: long = 0
+
+    assert_eq(status_of(ask(control, &clock, "POST", "/click", "x=0&y=0")), 200)
+    empty_queue()
+
+    val cl = request(at, "POST", "/click", "x=100&y=0")
+
+    clock += 10
+    control.poll_at(clock)
+    clock += 50
+    control.poll_at(clock)
+
+    assert(control.pointer().x > 0 && control.pointer().x < 100, "halfway, not teleported")
+
+    finish(control, cl, &clock)
+    assert_eq(control.pointer().x, 100.0f32)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+a_hold_keeps_a_click_down_for_its_time()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, Options(0, 50, 0)).unwrap()
+    val cl = request(at, "POST", "/click", "x=1&y=1")
+
+    control.poll_at(100)
+    control.poll_at(101)
+    assert(control.pointer().down)
+    control.poll_at(120)
+    assert(control.pointer().down, "20 ms into a 50 ms hold")
+    control.poll_at(151)
+    assert(!control.pointer().down, "the frame the time is up, it lets go")
+
+    var clock: long = 160
+
+    finish(control, cl, &clock)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+a_key_with_modifiers_comes_out_as_a_keyboard_would_send_it()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val window = create_window("k", 32, 32, WINDOW_HIDDEN).unwrap()
+    val control = listen(at, Some(window), instant()).unwrap()
+    val before = mod_state()
+
+    empty_queue()
+
+    var clock: long = 0
+
+    assert_eq(status_of(ask(control, &clock, "POST", "/key", "key=a&mods=ctrl,shift")), 200)
+
+    val got = events()
+
+    assert_eq(got.len(), 6usize)
+
+    val scancodes = [SCANCODE_LCTRL, SCANCODE_LSHIFT, SCANCODE_A, SCANCODE_A, SCANCODE_LSHIFT, SCANCODE_LCTRL]
+    val kinds = [EventKind.KeyDown, EventKind.KeyDown, EventKind.KeyDown, EventKind.KeyUp, EventKind.KeyUp, EventKind.KeyUp]
+    val both = KMOD_LCTRL | KMOD_LSHIFT
+    val mods = [KMOD_LCTRL, both, both, both, KMOD_LCTRL, 0]
+
+    for i in 0..<6
+        assert_eq(got.at(i).kind(), kinds[i], f"event $i")
+        assert_eq(got.at(i).key_scancode(), scancodes[i], f"event $i")
+        assert_eq(got.at(i).key_mod(), before | mods[i], f"event $i")
+        assert_eq(got.at(i).window_id(), window.id())
+        assert(!got.at(i).key_repeat())
+
+    assert_eq(got.at(2).key_code(), sh.sysl.sdl3.c.get_key_from_scancode(SCANCODE_A, both, true), "the keycode the modifiers make")
+    assert_eq(mod_state(), before, "and SDL's modifiers are as they were")
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+sdl_sees_the_modifiers_while_they_are_held()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    val cl = request(at, "POST", "/key", "key=a&mods=ctrl")
+
+    control.poll_at(1)
+    assert_eq(mod_state() & KMOD_LCTRL, KMOD_LCTRL)
+
+    var clock: long = 1
+
+    finish(control, cl, &clock)
+    assert_eq(mod_state() & KMOD_LCTRL, u16(0))
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+key_names_are_sdls_in_any_case_with_the_two_common_shorthands()
+    up()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    var clock: long = 0
+    val names = [("Return", SCANCODE_RETURN), ("return", SCANCODE_RETURN), ("enter", SCANCODE_RETURN), ("A", SCANCODE_A), ("a", SCANCODE_A)]
+
+    for i in 0..<names.len
+        empty_queue()
+
+        val (name, scancode) = names[i]
+
+        assert_eq(status_of(ask(control, &clock, "POST", "/key", f"key=$name")), 200, name)
+        assert_eq(events().at(0).key_scancode(), scancode, name)
+
+    assert_eq(status_of(ask(control, &clock, "POST", "/key", "key=esc")), 200)
+    assert_eq(events().at(0).key_scancode(), sh.sysl.sdl3.SCANCODE_ESCAPE)
+    assert_eq(status_of(ask(control, &clock, "POST", "/key", "key=del")), 200)
+    assert_eq(events().at(0).key_scancode(), sh.sysl.sdl3.SCANCODE_DELETE)
+    assert_eq(status_of(ask(control, &clock, "POST", "/key", "key=x&mods=ctrl+shift")), 200, "a + in a form is a space, and reads the same")
+    assert_eq(events().len(), 6usize)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+text_is_typed_a_character_a_frame_with_its_utf_8_whole()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    val cl = request(at, "POST", "/type", "text=h%C3%A9%F0%9F%98%80z")
+    val want = ["h", "é", "😀", "z"]
+
+    for i in 0..<4
+        control.poll_at(long(i))
+
+        val got = events()
+
+        assert_eq(got.len(), 1usize, f"character $i")
+        assert_eq(got.at(0).kind(), EventKind.TextInput)
+        assert_eq(got.at(0).text(), want[i])
+
+    var clock: long = 10
+
+    finish(control, cl, &clock)
+    assert_eq(status_of(cl), 200)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+a_newline_or_a_tab_is_a_key_and_not_text()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    var clock: long = 0
+
+    assert_eq(status_of(ask(control, &clock, "POST", "/type", "text=a%0Ab%09")), 200)
+
+    val got = events()
+
+    assert_eq(got.len(), 6usize)
+    assert_eq(got.at(0).text(), "a")
+    assert_eq(got.at(1).kind(), EventKind.KeyDown)
+    assert_eq(got.at(1).key_scancode(), SCANCODE_RETURN)
+    assert_eq(got.at(2).kind(), EventKind.KeyUp)
+    assert_eq(got.at(3).text(), "b")
+    assert_eq(got.at(4).key_scancode(), sh.sysl.sdl3.SCANCODE_TAB)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+nothing_to_type_is_answered_and_too_much_is_refused()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    var clock: long = 0
+
+    assert_eq(status_of(ask(control, &clock, "POST", "/type", "text=")), 200)
+    assert_eq(events().len(), 0usize)
+    // Four bytes a character, so the limit is fewer events than SDL's queue holds with nobody draining it.
+    assert_eq(status_of(ask_long(control, &clock, "/type", "text=" + repeat("%F0%9F%98%80", 16384))), 200, "the limit is allowed")
+    assert(!control.active(), "and it has all gone in")
+    assert_eq(events().len(), 16384usize)
+    assert_eq(status_of(ask_long(control, &clock, "/type", "text=" + repeat("a", 65537))), 400, "and one more is not")
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+typed_text_stays_readable_until_the_program_gets_to_it()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    var clock: long = 0
+
+    // Two hundred characters go in with nobody draining the queue.
+    assert_eq(status_of(ask(control, &clock, "POST", "/type", "text=" + repeat("q", 200))), 200)
+
+    val got = events()
+
+    assert_eq(got.len(), 200usize)
+
+    for i in 0..<200
+        assert_eq(got.at(i).text(), "q")
+
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+closing_takes_typed_text_still_queued_with_it()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    val cl = request(at, "POST", "/type", "text=ab")
+
+    control.poll_at(1)
+    control.close()
+    _ = cl.socket.close()
+
+    assert_eq(events().len(), 0usize, "SDL no longer holds a pointer to a string that has gone")
+    remove_dir_all(dir).unwrap()
+
+@test
+a_wait_counts_frames_after_the_input_before_it()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    val click = request(at, "POST", "/click", "x=1&y=1")
+    val wait = request(at, "POST", "/wait", "frames=5")
+    var polls = 0
+
+    for _ in 0..<40
+        control.poll_at(1)
+        drain(wait)
+
+        if wait.over then break
+
+        polls += 1
+
+    assert_eq(status_of(wait), 200)
+    assert_eq(polls, 7, "the wait starts on the click's last frame and is answered five frames on")
+    drain(click)
+    assert_eq(status_of(click), 200, "the click was answered first")
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+a_wait_counts_time()
+    up()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    val wait = request(at, "POST", "/wait", "ms=100")
+
+    control.poll_at(1000)
+    control.poll_at(1050)
+    drain(wait)
+    assert_eq(wait.got.len(), 0usize, "50 ms into 100")
+    control.poll_at(1100)
+    control.poll_at(1101)
+
+    var clock: long = 1101
+
+    finish(control, wait, &clock)
+    assert_eq(status_of(wait), 200)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+// ## State
+
+@test
+state_reports_the_frame_the_pointer_and_the_window()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val window = create_window("s", 320, 200, WINDOW_HIDDEN).unwrap()
+    val control = listen(at, Some(window), instant()).unwrap()
+    var clock: long = 0
+
+    assert_eq(status_of(ask(control, &clock, "POST", "/click", "x=3&y=4&button=middle")), 200)
+
+    val parsed = sysl.encoding.json.parse(body_text(ask(control, &clock, "GET", "/state"))).unwrap()
+    val pointer = parsed.get("pointer").unwrap()
+    val shape = parsed.get("window").unwrap()
+
+    assert(parsed.get("frame").unwrap().as_real().unwrap() > 0)
+    assert_eq(parsed.get("active").unwrap().as_bool().unwrap(), false)
+    assert_eq(pointer.get("x").unwrap().as_real().unwrap(), 3.0)
+    assert_eq(pointer.get("y").unwrap().as_real().unwrap(), 4.0)
+    assert_eq(pointer.get("down").unwrap().as_bool().unwrap(), false)
+    assert_eq(pointer.get("button").unwrap().as_real().unwrap(), 2.0)
+    assert_eq(pointer.get("seen").unwrap().as_bool().unwrap(), true)
+    assert_eq(shape.get("width").unwrap().as_real().unwrap(), 320.0)
+    assert_eq(shape.get("height").unwrap().as_real().unwrap(), 200.0)
+    assert_eq(shape.get("hidden").unwrap().as_bool().unwrap(), true, "the hidden window says it is")
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+state_with_no_window_says_so()
+    up()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at).unwrap()
+    var clock: long = 0
+
+    assert(body_text(ask(control, &clock, "GET", "/state")).contains("\"window\":null"))
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+// ## Routes
+
+@test
+a_route_answers_before_the_built_in_commands()
+    up()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at).unwrap()
+    var clock: long = 0
+
+    control.route((req) ->
+        if req.path == "/snapshot"
+            Some(json(200, f"{\"who\":${json.quoted(req.param("who").unwrap_or("?"))}}\n"))
+        else if req.path == "/state"
+            Some(text(200, "mine"))
+        else
+            None)
+    control.route((req) ->
+        if req.path == "/snapshot" then Some(text(200, "second")) else if req.path == "/later" then Some(text(200, "later")) else None)
+
+    assert_eq(body_text(ask(control, &clock, "POST", "/snapshot?who=me")), "{\"who\":\"me\"}\n", "the first added is the first asked")
+    assert_eq(body_text(ask(control, &clock, "GET", "/state")), "mine", "a route may replace a command")
+    assert_eq(body_text(ask(control, &clock, "GET", "/later")), "later", "a route that passes leaves it to the next")
+    assert_eq(status_of(ask(control, &clock, "GET", "/shot-of-nothing")), 404, "and what none takes goes on")
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+// ## Refusals, over the wire
+
+@test
+an_unknown_route_is_404_and_a_wrong_method_is_405_with_allow()
+    up()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at).unwrap()
+    var clock: long = 0
+
+    assert_eq(status_of(ask(control, &clock, "GET", "/nope")), 404)
+
+    val wrong = ask(control, &clock, "GET", "/click")
+
+    assert_eq(status_of(wrong), 405)
+    assert(from_utf8_lossy(wrong.got.view()).contains("Allow: POST\r\n"))
+
+    val other = ask(control, &clock, "POST", "/state")
+
+    assert_eq(status_of(other), 405)
+    assert(from_utf8_lossy(other.got.view()).contains("Allow: GET\r\n"))
+    assert_eq(status_of(ask(control, &clock, "GET", "/")), 200, "and the root says what there is")
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+garbage_is_a_400_and_a_body_too_large_a_413_that_the_client_can_read()
+    up()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at).unwrap()
+    var clock: long = 0
+    val bad = connect(at)
+
+    bad.socket.send_all("NOT HTTP\r\n\r\n".bytes).unwrap()
+    finish(control, bad, &clock)
+    assert_eq(status_of(bad), 400)
+
+    val big = connect(at)
+
+    // More follows the head than it will ever read. The answer still has to arrive.
+    big.socket.send_all(f"POST /type HTTP/1.1\r\nContent-Length: 99999999\r\n\r\n${repeat("x", 4000)}".bytes).unwrap()
+    finish(control, big, &clock)
+    assert_eq(status_of(big), 413)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+a_request_split_across_frames_is_answered()
+    up()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    val cl = connect(at)
+    val whole = "POST /click HTTP/1.1\r\nContent-Length: 7\r\n\r\nx=1&y=2"
+    var clock: long = 0
+
+    for i in 0..<whole.len
+        cl.socket.send_all(whole.bytes[i..<i + 1]).unwrap()
+        clock += 1
+        control.poll_at(clock)
+        drain(cl)
+
+        if i + 1 < whole.len then assert_eq(cl.got.len(), 0usize, "nothing is answered early")
+
+    finish(control, cl, &clock)
+    assert_eq(status_of(cl), 200)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+a_body_arriving_over_many_frames_stays_inside_the_read_budget()
+    up()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    val cl = connect(at)
+    val body = "text=" + repeat("a", 500000)
+    val head = f"POST /wait HTTP/1.1\r\nContent-Length: ${body.len}\r\n\r\n"
+    var clock: long = 0
+    var sent: usize = 0
+    var polls = 0
+    val whole = (head + body + "&frames=0").bytes
+
+    // The Content-Length is short of the tail on purpose: only what it counts belongs to the request.
+    while sent < head.len + body.len
+        cl.socket.send(whole[sent..<head.len + body.len]) match
+            Ok(n) -> sent += n
+            Err(e) -> assert(would_block(e))
+
+        clock += 1
+        control.poll_at(clock)
+        polls += 1
+
+        assert(polls < 100000, "the request stopped moving")
+
+    assert(polls >= 7, f"half a megabyte at 64 KB a frame takes eight or so frames, not $polls")
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+a_request_that_never_finishes_times_out_with_408()
+    up()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at).unwrap()
+    val cl = connect(at)
+
+    cl.socket.send_all("GET /st".bytes).unwrap()
+    control.poll_at(1000)
+    control.poll_at(5000)
+    drain(cl)
+    assert_eq(cl.got.len(), 0usize, "it may yet arrive")
+    control.poll_at(12000)
+
+    var clock: long = 12000
+
+    finish(control, cl, &clock)
+    assert_eq(status_of(cl), 408)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+// ## Clients behaving badly, and the loop going on
+
+@test
+a_client_that_disconnects_mid_request_does_not_hurt_the_loop()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    var clock: long = 0
+    val gone = connect(at)
+
+    gone.socket.send_all("POST /click HTTP/1.1\r\nContent-Length: 100\r\n\r\nx=1".bytes).unwrap()
+    control.poll_at(1)
+    gone.socket.close().unwrap()
+    control.poll_at(2)
+    control.poll_at(3)
+
+    assert_eq(events().len(), 0usize, "half a command does nothing")
+    assert_eq(status_of(ask(control, &clock, "GET", "/state")), 200, "and the next client is served")
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+a_client_that_disconnects_while_a_command_runs_does_not_hurt_the_loop()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    var clock: long = 0
+    val gone = request(at, "POST", "/click", "x=1&y=1")
+
+    control.poll_at(1)
+    gone.socket.close().unwrap()
+
+    for i in 0..<10
+        control.poll_at(long(i + 2))
+
+    assert_eq(events().len(), 3usize, "the command it asked for still finishes")
+    assert_eq(status_of(ask(control, &clock, "GET", "/state")), 200)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+a_client_that_disconnects_before_its_shot_does_not_hurt_the_loop()
+    up()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at).unwrap()
+    var clock: long = 0
+    val gone = request(at, "GET", "/shot")
+
+    control.poll_at(1)
+    assert(control.wants_shot())
+    gone.socket.close().unwrap()
+
+    var rgba: []u8 = [255; 400]
+
+    control.deliver_rgba(10, 10, rgba)
+    control.poll_at(2)
+    control.poll_at(3)
+    assert(!control.wants_shot())
+    assert_eq(status_of(ask(control, &clock, "GET", "/state")), 200)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+a_client_that_disconnects_partway_through_a_large_answer_does_not_hurt_the_loop()
+    up()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at).unwrap()
+    var clock: long = 0
+
+    control.route((req) ->
+        if req.path == "/big" then Some(text(200, repeat("z", 8000000))) else None)
+
+    val gone = request(at, "GET", "/big")
+
+    control.poll_at(1)
+    control.poll_at(2)
+    gone.socket.close().unwrap()
+    control.poll_at(3)
+    control.poll_at(4)
+    assert_eq(status_of(ask(control, &clock, "GET", "/state")), 200)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+a_large_answer_arrives_whole_for_a_client_that_reads_it()
+    up()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at).unwrap()
+    var clock: long = 0
+
+    control.route((req) ->
+        if req.path == "/big" then Some(text(200, repeat("z", 3000000))) else None)
+
+    val cl = ask(control, &clock, "GET", "/big")
+
+    assert_eq(body_of(cl).len, 3000000usize)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+a_client_that_stops_reading_is_hung_up_on()
+    up()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at).unwrap()
+    var clock: long = 0
+
+    control.route((req) ->
+        if req.path == "/big" then Some(text(200, repeat("z", 8000000))) else None)
+
+    val stuck = request(at, "GET", "/big")
+
+    control.poll_at(1)
+    control.poll_at(2)
+    control.poll_at(12100)
+    drain(stuck)
+    control.poll_at(12101)
+
+    // The answer stopped at the buffer's size, and the connection has gone from the count below.
+    clock = 12101
+    assert(stuck.got.len() < 8000000)
+    assert_eq(status_of(ask(control, &clock, "GET", "/state")), 200)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+idle_connections_hold_their_places_and_the_rest_wait_their_turn()
+    up()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at).unwrap()
+    var idle: Buf[&Client] = buf()
+
+    for _ in 0..<16
+        idle.push(connect(at))
+
+    control.poll_at(1)
+
+    val late = request(at, "GET", "/state")
+
+    control.poll_at(2)
+    drain(late)
+    assert_eq(late.got.len(), 0usize, "sixteen are taken, and the poll has not waited for any of them")
+
+    // Their time runs out, and the seventeenth gets its turn.
+    var clock: long = 10100
+
+    control.poll_at(clock)
+    finish(control, late, &clock)
+    assert_eq(status_of(late), 200)
+
+    for i in 0..<16
+        _ = idle.at(i).socket.close()
+
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+sdl_refusing_an_event_is_a_500_not_a_silent_success()
+    up()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    var clock: long = 0
+    val cl = request(at, "POST", "/click", "x=1&y=1")
+
+    quit()
+    finish(control, cl, &clock)
+    assert_eq(status_of(cl), 500)
+    assert_eq(status_of(ask(control, &clock, "GET", "/state")), 200, "and the failure does not outlive the command")
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+// ## Shots
+
+@test
+a_shot_of_a_hidden_window_has_the_signature_the_size_and_the_pixels()
+    up()
+
+    val (dir, at) = socket_in("a.sock")
+    val window = create_window("shot", 48, 32, WINDOW_HIDDEN).unwrap()
+    val renderer = window.create_renderer().unwrap()
+    val control = listen(at, Some(window)).unwrap()
+    val cl = request(at, "GET", "/shot")
+
+    control.poll_at(1)
+    assert(control.wants_shot())
+    assert(control.active())
+
+    renderer.set_draw_color(Color(10, 20, 30, 255))
+    renderer.clear()
+    renderer.set_draw_color(Color(200, 100, 50, 255))
+    renderer.fill_rect(8, 4, 16, 8)
+    control.capture(renderer)
+
+    assert(!control.wants_shot(), "the frame has answered it")
+
+    var clock: long = 1
+
+    finish(control, cl, &clock)
+    assert_eq(status_of(cl), 200)
+    assert(from_utf8_lossy(cl.got.view()).contains("Content-Type: image/png\r\n"))
+
+    val file = body_of(cl)
+    val signature = [u8(137), 80, 78, 71, 13, 10, 26, 10]
+
+    for i in 0..<8
+        assert_eq(file[i], signature[i], f"signature byte $i")
+
+    val image = png.decode(file).unwrap()
+
+    assert_eq(image.width, 48usize)
+    assert_eq(image.height, 32usize)
+    assert_rgb(image.at(0, 0), 10, 20, 30, "the background")
+    assert_rgb(image.at(8, 4), 200, 100, 50, "the rectangle's first corner")
+    assert_rgb(image.at(23, 11), 200, 100, 50, "and its last")
+    assert_rgb(image.at(24, 11), 10, 20, 30, "just outside it across")
+    assert_rgb(image.at(23, 12), 10, 20, 30, "and down")
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+capture_with_nobody_waiting_does_nothing()
+    up()
+
+    val (dir, at) = socket_in("a.sock")
+    val window = create_window("shot", 8, 8, WINDOW_HIDDEN).unwrap()
+    val renderer = window.create_renderer().unwrap()
+    val control = listen(at, Some(window)).unwrap()
+
+    assert(!control.wants_shot())
+    control.capture(renderer)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+two_waiting_shots_are_both_answered_by_one_frame()
+    up()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at).unwrap()
+    val a = request(at, "GET", "/shot")
+    val b = request(at, "GET", "/shot")
+
+    control.poll_at(1)
+
+    var rgba: []u8 = [9; 16]
+
+    control.deliver_rgba(2, 2, rgba)
+
+    var clock: long = 1
+
+    finish(control, a, &clock)
+    finish(control, b, &clock)
+    assert_eq(status_of(a), 200)
+    assert_eq(status_of(b), 200)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+rgba_frames_are_encoded_with_the_alpha_dropped()
+    var rgba: []u8 = [1, 2, 3, 0, 4, 5, 6, 128]
+    val image = png.decode(rgba_png(2, 1, rgba).unwrap().view()).unwrap()
+
+    assert_rgb(image.at(0, 0), 1, 2, 3, "a transparent byte still shows its colour")
+    assert_rgb(image.at(1, 0), 4, 5, 6, "the second pixel")
+    assert(rgba_png(2, 2, rgba).is_err(), "too few bytes")
+    assert(rgba_png(0, 0, rgba).is_err(), "no frame at all")
+    assert(rgba_png(-1, 1, rgba).is_err())
+
+@test
+a_frame_of_the_wrong_size_is_a_500()
+    up()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at).unwrap()
+    val cl = request(at, "GET", "/shot")
+
+    control.poll_at(1)
+
+    var rgba: []u8 = [0; 3]
+
+    control.deliver_rgba(4, 4, rgba)
+
+    var clock: long = 1
+
+    finish(control, cl, &clock)
+    assert_eq(status_of(cl), 500)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+a_program_that_never_captures_is_a_503_and_not_a_hang()
+    up()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at).unwrap()
+    val cl = request(at, "GET", "/shot")
+
+    control.poll_at(1000)
+    control.poll_at(5000)
+    drain(cl)
+    assert_eq(cl.got.len(), 0usize, "four seconds is not five")
+    control.poll_at(6100)
+    assert(!control.wants_shot())
+
+    var clock: long = 6100
+
+    finish(control, cl, &clock)
+    assert_eq(status_of(cl), 503)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+a_shot_taken_after_a_command_shows_what_it_did()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val window = create_window("after", 16, 16, WINDOW_HIDDEN).unwrap()
+    val renderer = window.create_renderer().unwrap()
+    val control = listen(at, Some(window), instant()).unwrap()
+    val click = request(at, "POST", "/click", "x=1&y=1")
+    var lit = false
+
+    // A frame loop in miniature, whose picture is what the events said last.
+    for _ in 0..<20
+        control.poll_at(1)
+
+        for e in event_list()
+            if e.kind() == EventKind.MouseButtonUp then lit = true
+
+        renderer.set_draw_color(if lit then Color(255, 255, 255, 255) else Color(0, 0, 0, 255))
+        renderer.clear()
+        control.capture(renderer)
+        drain(click)
+
+        if click.over then break
+
+    assert(click.over)
+
+    val cl = request(at, "GET", "/shot")
+
+    for _ in 0..<2000
+        control.poll_at(1)
+        renderer.clear()
+        control.capture(renderer)
+        drain(cl)
+
+        if cl.over then break
+
+    assert_rgb(png.decode(body_of(cl)).unwrap().at(0, 0), 255, 255, 255, "the frame after the release")
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+private event_list() -> []Event = events().view()
+
+// ## The real client
+
+// Run `curl` to the end with frames going by, drawing into `renderer` each one.
+private curl(control: &Control, renderer: &sh.sysl.sdl3.Renderer, clock: *long, arguments: []const string) -> string
+    var all: Buf[string] = buf()
+
+    all.extend(["--silent", "--max-time", "20", "--unix-socket", control.path()])
+    all.extend(arguments)
+
+    val out = control.path() + ".out"
+    val child = process.spawn("curl", all.view(), stdout = process.Stdio.ToPath(out)).unwrap()
+
+    loop
+        *clock += 1
+        control.poll_at(*clock)
+        empty_queue()
+        renderer.clear()
+        control.capture(renderer)
+
+        child.try_wait().unwrap() match
+            Some(status) ->
+                assert(status.ok(), "curl failed")
+                return sysl.fs.read_text(out).unwrap()
+            None -> ()
+end curl
+
+@test
+curl_is_the_whole_client()
+    up()
+
+    val (dir, at) = socket_in("a.sock")
+    val window = create_window("curl", 24, 16, WINDOW_HIDDEN).unwrap()
+    val renderer = window.create_renderer().unwrap()
+    val control = listen(at, Some(window), instant()).unwrap()
+    val file = join(dir, "shot.png")
+    var clock: long = 0
+
+    renderer.set_draw_color(Color(40, 80, 160, 255))
+
+    assert(curl(control, renderer, &clock, ["http://app/click", "-d", "x=5", "-d", "y=6"]).contains("\"ok\":true"))
+    assert_eq(control.pointer().x, 5.0f32)
+    assert(curl(control, renderer, &clock, ["http://app/drag", "-d", "from=1,2", "-d", "to=9,8", "-d", "duration=5"]).contains("\"ok\":true"))
+    assert_eq(control.pointer().y, 8.0f32)
+    assert(curl(control, renderer, &clock, ["http://app/key", "-d", "key=Return", "-d", "mods=ctrl"]).contains("\"ok\":true"))
+    assert(curl(control, renderer, &clock, ["http://app/type", "--data-urlencode", "text=a b&c"]).contains("\"ok\":true"))
+    assert(curl(control, renderer, &clock, ["http://app/wait", "-d", "frames=2"]).contains("\"ok\":true"))
+    assert(curl(control, renderer, &clock, ["http://app/state"]).contains("\"width\":24"))
+    assert(curl(control, renderer, &clock, ["http://app/nope"]).contains("no such route"))
+
+    _ = curl(control, renderer, &clock, ["http://app/shot", "-o", file])
+
+    val image = png.decode(sysl.fs.read_bytes(file).unwrap().view()).unwrap()
+
+    assert_eq(image.width, 24usize)
+    assert_rgb(image.at(3, 3), 40, 80, 160, "a frame read back through a real client")
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+// ## The example
+
+@test
+the_example_builds()
+    val dir = make_temp_dir("ctl-").unwrap()
+    val binary = join(dir, "control")
+
+    process.capture("sysl", ["build", ".", "--lib", "../..", "-o", binary], "examples/control") match
+        Ok(o) -> assert(o.status.ok(), f"sysl build of examples/control: ${o.err.unwrap_or(o.text)}")
+        Err(e) -> panic(f"sysl did not run: $e")
+
+    remove_dir_all(dir).unwrap()

@@ -10,7 +10,7 @@ on-screen keyboard, and the lifecycle events an app is stopped and restarted by.
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.17" }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.18" }
 }
 ```
 
@@ -552,6 +552,101 @@ val shot = renderer.read_pixels().expect("the frame")
 save_png(shot, "screenshot.png")        // sdl3-image
 ```
 
+## Controlling a running program
+
+`sh.sysl.sdl3.control` lets a running program be driven from outside, the way a browser is through
+its developer tools: HTTP on a private Unix socket, with `curl` as the complete client. A person
+watching the window sees what is happening, and a frame can be asked for at any moment.
+
+```sysl
+import sh.sysl.sdl3.control.{listen, json}
+
+val control = listen("/tmp/app.sock", Some(window)).expect("the control socket")
+
+loop
+    control.poll()              // once a frame, before draining events; it never waits
+
+    // drain events, draw ...
+
+    control.capture(renderer)   // after drawing and before present; it does nothing unless asked
+    renderer.present()
+```
+
+```sh
+S=/tmp/app.sock
+curl --unix-socket $S http://app/click -d x=120 -d y=80
+curl --unix-socket $S http://app/drag -d from=100,100 -d to=500,300 -d duration=1000
+curl --unix-socket $S http://app/key -d key=s -d mods=ctrl,shift
+curl --unix-socket $S http://app/type --data-urlencode "text=hello, world"
+curl --unix-socket $S http://app/wait -d frames=2
+curl --unix-socket $S http://app/state
+curl --unix-socket $S http://app/shot -o shot.png
+```
+
+| route | parameters | what happens |
+|---|---|---|
+| `GET /` | | this list, as text |
+| `GET /state` | | the frame, the pointer and the window, as JSON |
+| `GET /shot` | | the frame as a PNG, 503 if the program delivers none within five seconds |
+| `POST /click` | `x`, `y`, `button`, `clicks` | the pointer travels there, presses, holds, lets go |
+| `POST /drag` | `from=x,y`, `to=x,y`, `duration` (ms), `button` | it travels to `from`, presses, moves with the clock, lets go at `to` |
+| `POST /key` | `key`, `mods` (`ctrl`, `shift`, `alt`, `gui`) | the modifiers go down, the key goes down and up, the modifiers come up |
+| `POST /type` | `text`, `pace` (ms) | a character at a time; a newline or tab is that key instead |
+| `POST /wait` | `frames` and/or `ms` | answered when the input queued before it has gone in and this has passed |
+
+Parameters are form-encoded or in the query. A key is SDL's name for it in any case (`Return`, `a`,
+`F5`, `=`), and `enter`, `esc` and `del` work too. A command is answered when its last event has
+gone in, so a `/shot` that follows it shows what it did. Bad input is a 400, 404, 405, 408 or 413
+carrying `{"error": …}`.
+
+**The input is watchable, and it is real.** Everything goes in by `SDL_PushEvent`, at most one event a
+frame, so the program cannot tell it from a mouse and keyboard, and what would flash by takes the time
+a person takes: `Options` sets how long the pointer takes to arrive, how long a press is held and how
+long between characters, and zero still gives each event a frame of its own. **SDL's own mouse state
+does not move** — `mouse_state()` still answers the real mouse — so a program that reads the pointer
+rather than its events asks `control.pointer()`, which is also what it draws a pointer and a press
+marker from:
+
+```sysl
+val p = control.pointer()     // x, y, down, button, seen
+
+if p.seen then renderer.fill_rect(p.x - 3, p.y - 3, 6, 6)
+if p.down then renderer.draw_rect(p.x - 10, p.y - 10, 20, 20)
+```
+
+**Add routes with a closure** from a request to an optional response. It sees each request before the
+built-in commands, and it runs inside `poll` on the frame loop's thread, so it reads the program's
+state with no lock:
+
+```sysl
+control.route((req) ->
+    if req.path == "/score" then Some(json(200, f"{\"score\":${game.score}}\n")) else None)
+```
+
+`req.method`, `req.path`, `req.header(name)`, `req.param(name)` and `req.body` are what it has to go
+on, and `json`, `text`, `bytes` and `error_response` make what goes back.
+
+**A program drawing with the GPU** delivers the frame itself, only when one is wanted, so it reads back
+nothing otherwise: `if control.wants_shot()`, copy the frame to a transfer buffer as `gpu_tests.sysl`
+does, then `control.deliver_rgba(width, height, pixels)`. A window created with `WINDOW_HIDDEN` works
+the same, since the events go on SDL's queue and the renderer draws where it draws.
+
+**A program that sleeps** until an event has to wake to `poll` a few times a second, since a client
+arriving raises no SDL event, and should keep drawing while `control.active()` holds. The whole of
+this is `examples/control`.
+
+**The socket** is created owner-only: it is bound in a private directory, given its mode there and
+only then renamed into place, so at no moment is it open wider. A socket a dead program left is
+replaced; a live one, or anything at the path that is not a socket, is refused. `control.close()`, or
+the last reference going, removes the file. Nothing here blocks the frame: the listener and the
+connections are non-blocking, a poll reads at most 64 KB and spends at most 2 ms writing, and a client
+that stalls is hung up on after ten seconds. **`listen` ignores `SIGPIPE` for the whole process**,
+because a send to a client that has gone raises it, and the default action would end the program.
+
+Connections are one request each, and the answer closes them. Deliberately absent: keep-alive and
+chunked uploads, JSON request bodies (a parameter is what `curl -d` writes), and any access control
+beyond the socket file's owner.
+
 ## Events
 
 `SDL_Event` is a union of about thirty structs in 128 bytes. `c` declares it as the header every
@@ -592,7 +687,7 @@ SDL's queue, and `pumped` from `sh.sysl.kairos.pump` composes it with any kairos
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.17", features = [kairos] }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.18", features = [kairos] }
   kairos { git = "github.com/sysl-lang/kairos", version = "0.1.7" }
 }
 ```

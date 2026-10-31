@@ -13,7 +13,8 @@ module sh.sysl.sdl3.control
 // and each of those shapes is one a server and a client can read two ways.
 
 import sysl.buf.{Buf, buf}
-import sysl.text.{eq_fold, from_utf8, from_utf8_lossy, str_builder}
+import sysl.encoding.json.quoted
+import sysl.text.{eq_fold, from_utf8, from_utf8_lossy}
 
 /** The most a request line and its headers may come to, in bytes. */
 val max_head: usize = 8192
@@ -309,7 +310,7 @@ bytes(status: int, content_type: string, body: []const u8) -> Response
     Response(status, content_type, b, "")
 end bytes
 
-/** A JSON response. `body` is JSON already; `json_string` quotes a piece of text for it. */
+/** A JSON response. `body` is JSON already; `sysl.encoding.json.quoted` quotes a piece of text for it. */
 json(status: int, body: string) -> Response = bytes(status, "application/json", body.bytes)
 
 /** A plain text response. */
@@ -317,32 +318,7 @@ text(status: int, body: string) -> Response = bytes(status, "text/plain; charset
 
 /** The JSON that says something went wrong, which is what every refusal here carries. */
 error_response(status: int, reason: string) -> Response =
-    json(status, f"{\"error\":${json_string(reason)}}\n")
-
-/** `s` as a JSON string, quotes included. */
-json_string(s: string) -> string
-    val hex = "0123456789abcdef"
-    var out = str_builder()
-
-    out.push("\"")
-
-    for ch in s.chars
-        val code = u32(ch)
-
-        if ch == '"'
-            out.push("\\\"")
-        else if ch == '\\'
-            out.push("\\\\")
-        else if code < 32
-            out.push("\\u00")
-            out.push(hex[usize(code >> 4)..<usize(code >> 4) + 1])
-            out.push(hex[usize(code & 15)..<usize(code & 15) + 1])
-        else
-            out.push_char(ch)
-
-    out.push("\"")
-    out.finish()
-end json_string
+    json(status, f"{\"error\":${quoted(reason)}}\n")
 
 /** The words that go with a status this module answers. */
 reason_phrase(status: int) -> string

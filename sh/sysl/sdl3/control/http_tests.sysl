@@ -1,0 +1,248 @@
+module sh.sysl.sdl3.control
+@requires(posix)
+@tests
+
+// The parser and the writer, which are pure functions over bytes: no socket and no SDL here.
+
+import sysl.buf.{Buf, buf}
+import sysl.text.{from_utf8_lossy, repeat}
+
+private complete(s: string) -> Request
+    parse_request(s.bytes) match
+        Complete(r, used) ->
+            assert_eq(used, s.len, "the whole of it was used")
+            r
+        Incomplete -> panic(f"incomplete: $s")
+        Bad(status, reason) -> panic(f"bad $status $reason: $s")
+end complete
+
+private refused(s: string) -> int
+    parse_request(s.bytes) match
+        Bad(status, _) -> status
+        Incomplete -> 0
+        Complete(_, _) -> 200
+end refused
+
+@test
+a_get_is_read_into_its_parts()
+    val r = complete("GET /state?a=1&b=two HTTP/1.1\r\nHost: app\r\nX-Thing:   padded  \r\n\r\n")
+
+    assert_eq(r.method, "GET")
+    assert_eq(r.path, "/state")
+    assert_eq(r.query, "a=1&b=two")
+    assert_eq(r.headers.len(), 2usize)
+    assert_eq(r.header("host").unwrap(), "app", "a header's name matches in any case")
+    assert_eq(r.header("X-THING").unwrap(), "padded", "and its value loses its padding")
+    assert(r.header("absent").is_none())
+    assert_eq(r.param("b").unwrap(), "two")
+    assert_eq(r.body.len(), 0usize)
+
+@test
+a_post_body_is_read_and_its_parameters_decoded()
+    val r = complete("POST /type?pace=1 HTTP/1.1\r\nContent-Length: 19\r\n\r\ntext=a%20b+c&pace=2")
+
+    assert_eq(from_utf8_lossy(r.body.view()), "text=a%20b+c&pace=2")
+    assert_eq(r.param("text").unwrap(), "a b c")
+    assert_eq(r.param("pace").unwrap(), "1", "the query comes first")
+
+@test
+http_1_0_is_accepted_and_nothing_else_is()
+    assert_eq(refused("GET / HTTP/1.0\r\n\r\n"), 200)
+    assert_eq(refused("GET / HTTP/2.0\r\n\r\n"), 400)
+    assert_eq(refused("GET / http/1.1\r\n\r\n"), 400)
+
+@test
+every_split_of_a_request_reads_the_same()
+    val whole = "POST /click HTTP/1.1\r\nHost: app\r\nContent-Length: 7\r\n\r\nx=1&y=2"
+
+    for cut in 0..<whole.len
+        parse_request(whole.bytes[0..<cut]) match
+            Incomplete -> ()
+            _ -> panic(f"a request cut at $cut was not incomplete")
+
+    assert_eq(complete(whole).param("y").unwrap(), "2")
+
+@test
+what_follows_a_request_is_not_part_of_it()
+    val first = "GET /a HTTP/1.1\r\n\r\n"
+
+    parse_request((first + "GET /b HTTP/1.1\r\n\r\n").bytes) match
+        Complete(r, used) ->
+            assert_eq(r.path, "/a")
+            assert_eq(used, first.len)
+        _ -> panic("not complete")
+
+@test
+the_head_limit_is_exact()
+    val open = "GET / HTTP/1.1\r\nA: "
+    val close = "\r\n\r\n"
+    val fits = open + repeat("x", max_head - open.len - close.len) + close
+
+    assert_eq(fits.len, max_head)
+    assert_eq(refused(fits), 200, "a head of exactly the limit is read")
+    assert_eq(refused(open + repeat("x", max_head - open.len - close.len + 1) + close), 413, "and one byte more is not")
+    assert_eq(refused(repeat("x", max_head - 1)), 0, "short of the limit, more may yet come")
+    assert_eq(refused(repeat("x", max_head)), 413, "at it, no head can come")
+
+@test
+the_body_limit_is_refused_from_the_header_alone()
+    assert_eq(refused(f"POST / HTTP/1.1\r\nContent-Length: $max_body\r\n\r\n"), 0, "the limit itself is waited for")
+    assert_eq(refused(f"POST / HTTP/1.1\r\nContent-Length: ${max_body + 1}\r\n\r\n"), 413)
+    assert_eq(refused("POST / HTTP/1.1\r\nContent-Length: 99999999999999999999999999999999\r\n\r\n"), 413, "a number too long for any integer is still only too large")
+
+@test
+a_body_of_exactly_the_limit_is_read()
+    val head = f"POST / HTTP/1.1\r\nContent-Length: $max_body\r\n\r\n"
+
+    assert_eq(complete(head + repeat("a", max_body)).body.len(), max_body)
+
+@test
+malformed_requests_are_refused()
+    val cases = [
+        "\r\n\r\n",
+        "GET\r\n\r\n",
+        "GET /\r\n\r\n",
+        " / HTTP/1.1\r\n\r\n",
+        "GET  / HTTP/1.1\r\n\r\n",
+        "GET / HTTP/1.1 extra\r\n\r\n",
+        "G@T / HTTP/1.1\r\n\r\n",
+        "GET state HTTP/1.1\r\n\r\n",
+        "GET /\u{1} HTTP/1.1\r\n\r\n",
+        "GET / HTTP/1.1\r\nNoColon\r\n\r\n",
+        "GET / HTTP/1.1\r\n: value\r\n\r\n",
+        "GET / HTTP/1.1\r\nBad Name: value\r\n\r\n",
+        "GET / HTTP/1.1\r\nA: b\r\n c\r\n\r\n",
+        "GET / HTTP/1.1\r\nA: b\u{1}c\r\n\r\n",
+        "POST / HTTP/1.1\r\nContent-Length: ten\r\n\r\n",
+        "POST / HTTP/1.1\r\nContent-Length: -1\r\n\r\n",
+        "POST / HTTP/1.1\r\nContent-Length: \r\n\r\n",
+        "POST / HTTP/1.1\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\nab",
+        "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n",
+    ]
+
+    for i in 0..<cases.len
+        assert_eq(refused(cases[i]), 400, cases[i])
+
+    var not_utf8: Buf[u8] = buf()
+
+    not_utf8.extend("GET /".bytes)
+    not_utf8.push(0xFF)
+    not_utf8.extend(" HTTP/1.1\r\n\r\n".bytes)
+
+    parse_request(not_utf8.view()) match
+        Bad(status, _) -> assert_eq(status, 400, "a target that is not UTF-8")
+        _ -> panic("a target that is not UTF-8 was read")
+
+@test
+two_content_lengths_that_agree_are_one()
+    assert_eq(complete("POST / HTTP/1.1\r\nContent-Length: 1\r\ncontent-length: 1\r\n\r\na").body.len(), 1usize)
+
+// A fixed seed, so a failure here is a failure every time.
+private struct Rng
+    state: u64
+
+    next(*self) -> u64
+        self.state = self.state ^ (self.state << 13)
+        self.state = self.state ^ (self.state >> 7)
+        self.state = self.state ^ (self.state << 17)
+        self.state
+    end next
+
+    below(*self, n: usize) -> usize = usize(self.next() % u64(n))
+
+// What the parser owes any input: it answers, without a trap; a request it completes used bytes the
+// input had; a refusal is one of the two statuses it may refuse with; and what it refuses or completes
+// it would not, given less, have called anything but what it was still waiting for or a refusal.
+private check_any(b: []const u8)
+    parse_request(b) match
+        Complete(r, used) ->
+            assert(used <= b.len, "used more than it was given")
+            assert(r.path.len > 0 && r.path.bytes[0] == u8('/'), "a path starts with /")
+            assert(r.body.len() <= max_body, "a body over the limit")
+        Bad(status, _) -> assert(status == 400 || status == 413, f"refused with $status")
+        Incomplete -> assert(b.len < max_head + max_body + 64, "still waiting past every limit")
+end check_any
+
+@test
+fuzzed_bytes_never_trap_the_parser()
+    var rng = Rng(0x9E3779B97F4A7C15)
+    var alphabet: Buf[u8] = buf()
+    var input: Buf[u8] = buf()
+
+    alphabet.extend("GETPOST /:\r\n\t?&=%+-0123456789Content-Length: HTTP/1.1".bytes)
+    alphabet.push(0)
+    alphabet.push(0xFF)
+
+    for _ in 0..<5000
+        input.clear()
+
+        for _ in 0..<rng.below(200)
+            input.push(alphabet.at(rng.below(alphabet.len())))
+
+        check_any(input.view())
+
+@test
+fuzzed_mutations_of_a_valid_request_never_trap_the_parser()
+    var rng = Rng(0xD1B54A32D192ED03)
+    val valid = "POST /drag?a=1 HTTP/1.1\r\nHost: app\r\nContent-Length: 19\r\nAccept: */*\r\n\r\nfrom=1,2&to=3,4&d=5".bytes
+    var input: Buf[u8] = buf()
+
+    for _ in 0..<5000
+        input.clear()
+        input.extend(valid)
+
+        for _ in 0..<1 + rng.below(4)
+            input.set(rng.below(input.len()), u8(rng.below(256)))
+
+        check_any(input.view())
+
+        val cut = rng.below(input.len())
+
+        check_any(input.view()[0..<cut])
+
+@test
+form_decoding()
+    assert_eq(form_decode("a+b%20c".bytes).unwrap(), "a b c")
+    assert_eq(form_decode("%41%6a%6A".bytes).unwrap(), "Ajj", "either case of hex")
+    assert_eq(form_decode("%C3%A9".bytes).unwrap(), "é", "several bytes make one character")
+    assert_eq(form_decode("100%".bytes).unwrap(), "100%", "a % with nothing after it stands for itself")
+    assert_eq(form_decode("%4".bytes).unwrap(), "%4")
+    assert_eq(form_decode("%zz".bytes).unwrap(), "%zz")
+    assert(form_decode("%ff".bytes).is_none(), "bytes that are not UTF-8")
+    assert_eq(form_decode("".bytes).unwrap(), "")
+
+@test
+form_values_are_found_by_their_whole_name()
+    val b = "a=1&ab=2&empty=&bare&a=3&x%20y=4".bytes
+
+    assert_eq(form_value(b, "a").unwrap(), "1", "the first of a repeated name")
+    assert_eq(form_value(b, "ab").unwrap(), "2")
+    assert_eq(form_value(b, "empty").unwrap(), "")
+    assert_eq(form_value(b, "bare").unwrap(), "")
+    assert_eq(form_value(b, "x y").unwrap(), "4", "the name is decoded too")
+    assert(form_value(b, "b").is_none())
+    assert(form_value("".bytes, "a").is_none())
+
+@test
+a_refusal_quotes_what_it_says()
+    assert_eq(from_utf8_lossy(error_response(400, "a\"b\\c").body.view()), "{\"error\":\"a\\\"b\\\\c\"}\n")
+
+@test
+a_response_is_written_exactly()
+    assert_eq(from_utf8_lossy(write_response(text(200, "hi")).view()),
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi")
+
+    var r = error_response(405, "no")
+
+    r.allow = "POST"
+
+    assert_eq(from_utf8_lossy(write_response(r).view()),
+        "HTTP/1.1 405 Method Not Allowed\r\nContent-Type: application/json\r\nContent-Length: 15\r\nConnection: close\r\nAllow: POST\r\n\r\n{\"error\":\"no\"}\n")
+
+@test
+every_status_answered_has_its_words()
+    val statuses = [200, 400, 404, 405, 408, 413, 500, 503]
+    val words = ["OK", "Bad Request", "Not Found", "Method Not Allowed", "Request Timeout", "Content Too Large", "Internal Server Error", "Service Unavailable"]
+
+    for i in 0..<statuses.len
+        assert_eq(reason_phrase(statuses[i]), words[i])

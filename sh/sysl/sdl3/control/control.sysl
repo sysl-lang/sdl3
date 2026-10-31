@@ -35,7 +35,7 @@ import sysl.net.{Shutdown, Socket, UnixListener, unix, unix_connect, unix_listen
 import sysl.path.join
 import sysl.posix.time.monotonic
 import sysl.signal.{PIPE, ignore}
-import sysl.text.{CString, cstring, join as join_strings, parse_f32, parse_int, split}
+import sysl.text.{CString, Search, cstring,join as join_strings, parse_f32, parse_int, split}
 import sysl.time.whole_micros
 import sh.sysl.png
 import sh.sysl.sdl3.{EventKind, KMOD_ALT, KMOD_CTRL, KMOD_GUI, KMOD_LALT, KMOD_LCTRL, KMOD_LGUI, KMOD_LSHIFT, KMOD_SHIFT, MouseButton, PixelFormat, Renderer, SCANCODE_LALT, SCANCODE_LCTRL, SCANCODE_LGUI, SCANCODE_LSHIFT, Surface, WINDOW_HIDDEN, Window, error, flush_events, key_event, mod_state, mouse_button_event, mouse_motion_event, push_event, scancode_from_name, set_mod_state, text_input_event}
@@ -153,6 +153,7 @@ struct Control
     private conns: Buf[&Conn]
     private routes: Buf[&Fn(Request) -> Option[Response]]
     private steps: Buf[Step]
+    private head: usize
     private shots: Buf[&Conn]
     private typed: Buf[CString]
     private scratch: []u8
@@ -177,7 +178,7 @@ struct Control
      * that sleeps until an event should keep drawing while this holds, and should wake to `poll` at
      * least a few times a second regardless, since a client's arrival raises no SDL event.
      */
-    active(&self) -> bool = !self.steps.is_empty() || !self.shots.is_empty()
+    active(&self) -> bool = self.head < self.steps.len() || !self.shots.is_empty()
 
     /** How many times `poll` has run. */
     frame(&self) -> long = self.frames
@@ -239,6 +240,7 @@ struct Control
         teardown(self.hold, self.conns, self.typed)
         self.shots.clear()
         self.steps.clear()
+        self.head = 0
     end close
 
     private accept_new(&self, now: long)
@@ -249,7 +251,7 @@ struct Control
 
                     // Accepted connections block whatever the listener does.
                     if socket.non_blocking().is_err()
-                        drop_result(socket.close())
+                        _ = socket.close()
                     else
                         self.conns.push(Conn(socket, buf(), buf(), 0, Phase.Reading, now + idle_ms))
                 Err(_) -> return
@@ -439,6 +441,8 @@ struct Control
 
         if typed.len > max_typed then return Err(f"text is limited to $max_typed bytes")
 
+        if typed.bytes.has_byte(0) then return Err("text may not hold a NUL")
+
         val pace = bounded(req, "pace", 0, 1000, self.opts.type_ms)?
         var none: Buf[Modifier] = buf()
         var at: usize = 0
@@ -448,8 +452,6 @@ struct Control
             val piece = typed[at..<at + size]
 
             at += size
-
-            if piece == "\0" then return Err("text may not hold a NUL")
 
             // A person's Return or Tab is a key and no text at all.
             if piece == "\n"
@@ -467,8 +469,11 @@ struct Control
     private queue_wait(&self, conn: &Conn, req: Request) -> Result[Option[Response], string]
         if req.param("frames").is_none() && req.param("ms").is_none() then return Err("frames or ms is required")
 
-        self.steps.push(Frames(bounded(req, "frames", 0, 100000, 0)?))
-        self.steps.push(Pause(bounded(req, "ms", 0, 600000, 0)?))
+        val frames = bounded(req, "frames", 0, 100000, 0)?
+        val ms = bounded(req, "ms", 0, 600000, 0)?
+
+        self.steps.push(Frames(frames))
+        self.steps.push(Pause(ms))
 
         self.finish(conn)
     end queue_wait
@@ -479,8 +484,8 @@ struct Control
     private advance(&self, now: long)
         var pushed = false
 
-        while !self.steps.is_empty()
-            val done = self.steps.at(0) match
+        while self.head < self.steps.len()
+            val done = self.steps.at(self.head) match
                 Glide(x, y, ms) ->
                     if pushed then return
 
@@ -528,7 +533,10 @@ struct Control
             if !done then return
 
             self.started = -1
-            discard_step(self.steps.remove(0))
+            self.head += 1
+
+        self.steps.clear()
+        self.head = 0
     end advance
 
     // One step of the pointer's travel. Answers whether it has arrived.
@@ -599,7 +607,7 @@ struct Control
 
         self.typed.push(owned)
 
-        if self.typed.len() > typed_kept then discard_cstring(self.typed.remove(0))
+        if self.typed.len() > typed_kept then _ = self.typed.remove(0)
 
         self.push_checked(text_input_event(self.window_id(), owned.ptr))
     end push_typed
@@ -635,14 +643,14 @@ struct Control
                     Waiting -> self.respond(conn, error_response(503, "the program delivered no frame"), now)
                     _ -> shut(conn)
 
-            if conn.phase == Phase.Closed then discard_conn(self.conns.remove(i))
+            if conn.phase == Phase.Closed then _ = self.conns.remove(i)
 
         i = self.shots.len()
 
         while i > 0
             i -= 1
 
-            if self.shots.at(i).phase != Phase.Waiting then discard_conn(self.shots.remove(i))
+            if self.shots.at(i).phase != Phase.Waiting then _ = self.shots.remove(i)
     end sweep
 
     private answer_encoded(&self, encoded: Result[Buf[u8], string])
@@ -692,17 +700,9 @@ private teardown(hold: &Hold, conns: Buf[&Conn], typed: Buf[CString])
     if !typed.is_empty() then flush_events(EventKind.TextInput, EventKind.TextInput)
 
     typed.clear()
-    drop_result(hold.listener.close())
-    drop_result(remove_file(hold.at))
+    _ = hold.listener.close()
+    _ = remove_file(hold.at)
 end teardown
-
-private drop_result[T, E](r: Result[T, E]) = ()
-
-private discard_step(s: Step) = ()
-
-private discard_conn(c: &Conn) = ()
-
-private discard_cstring(s: CString) = ()
 
 private shut(conn: &Conn)
     if conn.phase == Phase.Closed then return
@@ -710,7 +710,7 @@ private shut(conn: &Conn)
     conn.phase = Phase.Closed
     conn.input.clear()
     conn.output.clear()
-    drop_result(conn.socket.close())
+    _ = conn.socket.close()
 end shut
 
 // Read and throw away what a client is still sending after its answer, so that hanging up cannot turn
@@ -741,7 +741,7 @@ private write_some(conn: &Conn, stop: long, now: long)
         val left = conn.output.len() - conn.sent
 
         if left == 0
-            drop_result(conn.socket.shutdown(Shutdown.Write))
+            _ = conn.socket.shutdown(Shutdown.Write)
             conn.output.clear()
             conn.phase = Phase.Draining
             conn.deadline = now + linger_ms
@@ -937,7 +937,7 @@ private clear_stale(at: string) -> Result[unit, ControlError]
         Ok(s) ->
             var live = s
 
-            drop_result(live.close())
+            _ = live.close()
             Err(InUse(at))
         Err(_) -> Ok(())
 end clear_stale
@@ -952,14 +952,14 @@ end clear_stale
  * than `max_unix_path`.
  */
 listen(path: string, window: Option[&Window] = None, opts: Options = options()) -> Result[&Control, ControlError]
-    drop_result(ignore(PIPE))
+    _ = ignore(PIPE)
     clear_stale(path)?
 
     val dir = path + ".d"
     val inner = join(dir, "s")
 
-    drop_result(remove_file(inner))
-    drop_result(remove_dir(dir))
+    _ = remove_file(inner)
+    _ = remove_dir(dir)
 
     val address = unix(inner) match
         Ok(a) -> a
@@ -971,15 +971,15 @@ listen(path: string, window: Option[&Window] = None, opts: Options = options()) 
 
     val made = bind_private(dir, inner, address, path)
 
-    drop_result(remove_file(inner))
-    drop_result(remove_dir(dir))
+    _ = remove_file(inner)
+    _ = remove_dir(dir)
 
     val listener = made?
 
     val blank = Pointer(0.0, 0.0, false, MouseButton.Left, false)
     val hold: &Hold = Hold(listener, path, false)
 
-    Ok(Control(hold, window, opts, buf(), buf(), buf(), buf(), buf(), [0; 16384], 0, -1, 0.0, 0.0, 0, false, blank))
+    Ok(Control(hold, window, opts, buf(), buf(), buf(), 0, buf(), buf(), [0; 16384], 0, -1, 0.0, 0.0, 0, false, blank))
 end listen
 
 private bind_private(dir: string, inner: string, address: sysl.net.UnixAddress, path: string) -> Result[UnixListener, ControlError]
@@ -996,6 +996,6 @@ private bind_private(dir: string, inner: string, address: sysl.net.UnixAddress, 
     installed match
         Ok(_) -> Ok(listener)
         Err(e) ->
-            drop_result(listener.close())
+            _ = listener.close()
             Err(Failed(f"$path: $e"))
 end bind_private
