@@ -4,13 +4,15 @@
 //     curl --unix-socket /tmp/app.sock http://app/drag -d from=100,100 -d to=500,300 -d duration=1000
 //     curl --unix-socket /tmp/app.sock http://app/shot -o shot.png
 //     curl --unix-socket /tmp/app.sock http://app/count
+//     curl --unix-socket /tmp/app.sock http://app/drag?grab=square -d to=300,200
 //
 // The square follows the events, as it would a real mouse, and it knows nothing of who sent them. The
 // controlled pointer is drawn from `Control.pointer`, and grows a box while it is pressed. `/count` is
-// a route of the program's own. Escape, real or sent, ends it.
+// a route of the program's own, and `grab=square` names where a drag starts: the program finds the
+// square and forwards a plain `/drag` from its middle. Escape, real or sent, ends it.
 
 import sh.sysl.sdl3.*
-import sh.sysl.sdl3.control.{json, listen}
+import sh.sysl.sdl3.control.{Forward, Pass, Respond, error_response, json, listen}
 
 struct Square
     x: f32
@@ -31,9 +33,14 @@ main(args: []string)
 
     control.route((req) ->
         if req.path == "/count" then Some(json(200, f"{\"drops\":${square.drops}}\n")) else None)
+    control.handle((req) ->
+        req.param("grab") match
+            None -> Pass
+            Some("square") -> Forward(req.rewritten(req.path, f"from=${square.x + 40},${square.y + 40}"))
+            Some(name) -> Respond(error_response(409, f"there is no $name to grab")))
 
     renderer.set_vsync(true)
-    print(f"listening on ${control.path()}")
+    print(f"${window.title()}: listening on ${control.path()}")
 
     var running = true
 

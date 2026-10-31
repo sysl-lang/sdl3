@@ -1081,6 +1081,23 @@ a_blend_is_clamped_at_both_ends()
 // ## Windows
 
 @test
+a_title_round_trips_whatever_its_shape()
+    assert(headless(), "SDL_Init")
+
+    val w = create_window("", 40, 30, WINDOW_HIDDEN).expect("the window opened")
+
+    assert_eq(w.title(), "", "an empty title")
+    assert(w.set_title("Save changes?"[0..<4]), "a slice of a longer string")
+    assert_eq(w.title(), "Save", "only the slice")
+    assert(w.set_title("Größe — 大きさ"), "non-ASCII")
+    assert_eq(w.title(), "Größe — 大きさ", "every byte of it")
+
+    val before = w.title()
+
+    assert(w.set_title("later"), "retitled again")
+    assert_eq(before, "Größe — 大きさ", "a title read earlier is a copy, not SDL's storage")
+
+@test
 a_window_reports_what_it_was_asked_for()
     assert(headless(), "SDL_Init")
 
@@ -1089,7 +1106,9 @@ a_window_reports_what_it_was_asked_for()
 
     assert_eq(ww, 100i32, "the width it was created with")
     assert_eq(wh, 60i32, "and the height")
+    assert_eq(w.title(), "title", "the title it was created with")
     assert(w.set_title("another"), "retitled")
+    assert_eq(w.title(), "another", "the title it was given")
     assert(w.set_size(120, 80), "resized")
 
     val (nw, nh) = w.size()

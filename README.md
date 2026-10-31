@@ -10,7 +10,7 @@ on-screen keyboard, and the lifecycle events an app is stopped and restarted by.
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.19" }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.20" }
 }
 ```
 
@@ -658,6 +658,33 @@ control.route((req) ->
 `req.method`, `req.path`, `req.header(name)`, `req.param(name)` and `req.body` are what it has to go
 on, and `json`, `text`, `bytes` and `error_response` make what goes back.
 
+**A route can also forward to the built-in commands.** One added with `handle` answers a `Routed`:
+`Respond(response)`, `Pass`, or `Forward(request)`, which runs the request through the built-ins
+exactly as if a client had sent it. That is how a layer above names a target its own way and still
+gets the watchable pointer: a forwarded `/click` puts in the same events, in the same frames, as a
+client's `/click` with those coordinates, and the client is answered when the release is done.
+`req.rewritten(path, query)` keeps the method, the headers and the body, so a parameter the new query
+does not name (`button`, `clicks`) still comes from the client:
+
+```sysl
+control.handle((req) ->
+    if req.path != "/click" then return Pass
+
+    req.param("ref") match
+        None -> Pass
+        Some(name) -> ui.find(name) match
+            Some(at) -> Forward(req.rewritten("/click", f"x=${at.x}&y=${at.y}"))
+            None -> Respond(error_response(409, f"nothing is called $name")))
+```
+
+Routes of both kinds are asked in the order they were added. A forwarded request goes straight to the
+built-ins, not back through the routes; a path no built-in has is a 404, the wrong method a 405, and
+bad parameters a 400, as for a client's own. `reason_phrase` knows the common statuses a route
+answers (201, 202, 204, 401, 403, 409, 410, 415, 422, 429, 501 besides the module's own).
+
+`Window.title()` reads back what `create_window` or `set_title` set, which a test of a program's
+title wants.
+
 **A program drawing with the GPU** delivers the frame itself, only when one is wanted, so it reads back
 nothing otherwise: `if control.wants_shot()`, copy the frame to a transfer buffer as `gpu_tests.sysl`
 does, then `control.deliver_rgba(width, height, pixels)`. A window created with `WINDOW_HIDDEN` works
@@ -719,7 +746,7 @@ SDL's queue, and `pumped` from `sh.sysl.kairos.pump` composes it with any kairos
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.19", features = [kairos] }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.20", features = [kairos] }
   kairos { git = "github.com/sysl-lang/kairos", version = "0.1.7" }
 }
 ```

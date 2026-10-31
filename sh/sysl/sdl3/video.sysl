@@ -373,6 +373,14 @@ struct Window
         c.set_window_title(self.handle, t.ptr)
     end set_title
 
+    // The window's title, copied out of SDL's storage, which the next `set_title` replaces. Empty
+    // where there is none, or where it is not UTF-8.
+    title(&self) -> string
+        val p = c.get_window_title(self.handle)
+
+        if p == null then "" else from_cstring(p).unwrap_or("")
+    end title
+
     set_fullscreen(&self, on: bool) -> bool = c.set_window_fullscreen(self.handle, on)
 
     set_resizable(&self, on: bool) -> bool = c.set_window_resizable(self.handle, on)

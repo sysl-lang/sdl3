@@ -11,7 +11,7 @@ import sysl.fs.{exists, make_temp_dir, metadata, remove_dir_all, remove_file, sy
 import sysl.net.{Socket, unix, unix_connect, unix_listen, would_block}
 import sysl.path.join
 import sysl.process
-import sysl.text.{Search, from_utf8_lossy, repeat}
+import sysl.text.{Search, from_utf8_lossy, join as join_lines, repeat}
 import sh.sysl.png
 import sh.sysl.sdl3.{Color, Event, EventKind, HINT_VIDEO_DRIVER, INIT_VIDEO, KMOD_LCTRL, KMOD_LSHIFT, MouseButton, SCANCODE_A, SCANCODE_LCTRL, SCANCODE_LSHIFT, SCANCODE_RETURN, WINDOW_HIDDEN, Window, create_window, init, key_name, mod_state, poll_event, quit, set_hint}
 
@@ -836,6 +836,196 @@ a_route_answers_before_the_built_in_commands()
     assert_eq(body_text(ask(control, &clock, "GET", "/state")), "mine", "a route may replace a command")
     assert_eq(body_text(ask(control, &clock, "GET", "/later")), "later", "a route that passes leaves it to the next")
     assert_eq(status_of(ask(control, &clock, "GET", "/shot-of-nothing")), 404, "and what none takes goes on")
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+// ## Forwarding from a route to the built-in commands
+
+// One event as a line a trace can compare: what it was, where, and whether it names this window.
+private describe(e: Event, window: &Window) -> string
+    val k = e.kind() match
+        EventKind.MouseMotion -> f"move held=${e.mouse_held()}"
+        EventKind.MouseButtonDown -> f"down right=${e.mouse_button() == MouseButton.Right} clicks=${e.mouse_clicks()}"
+        EventKind.MouseButtonUp -> f"up right=${e.mouse_button() == MouseButton.Right} clicks=${e.mouse_clicks()}"
+        _ -> return "something else"
+
+    f"$k at ${e.mouse_x()},${e.mouse_y()} mine=${e.window_id() == window.id()}"
+end describe
+
+// Every frame until the client has its whole answer: the events it put in, and the frame the first
+// byte of the answer came, at 10 ms a frame.
+private trace(control: &Control, window: &Window, cl: &Client, clock: *long) -> string
+    var out: Buf[string] = buf()
+    var answered = false
+
+    for frame in 0..<10000
+        *clock += 10
+        control.poll_at(*clock)
+
+        val got = events()
+
+        for i in 0..<got.len()
+            out.push(f"$frame: ${describe(got.at(i), window)}")
+
+        drain(cl)
+
+        if !answered && cl.got.len() > 0
+            answered = true
+            out.push(f"$frame: answered ${status_of(cl)}")
+
+        if cl.over then return join_lines(out.view(), "\n")
+
+    panic("no answer came")
+end trace
+
+// The trace of one request, sent by a client to a control of its own, with `routes` added to it first.
+private trace_of(method: string, target: string, body: string, routes: &Fn(&Control) -> unit) -> string
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val window = create_window("c", 320, 200, WINDOW_HIDDEN).unwrap()
+    val control = listen(at, Some(window), Options(50, 30, 20)).unwrap()
+
+    routes(control)
+
+    // A first click puts the pointer somewhere, so the traced one travels from there at the approach pace.
+    var clock: long = 0
+
+    assert_eq(status_of(ask(control, &clock, "POST", "/click", "x=1&y=2")), 200)
+    empty_queue()
+
+    val t = trace(control, window, request(at, method, target, body), &clock)
+
+    control.close()
+    remove_dir_all(dir).unwrap()
+    t
+end trace_of
+
+private no_routes(control: &Control) = ()
+
+// The route the forwarding tests add: `ref=ok` names (40.5, 20), and anything else is refused.
+private by_name(control: &Control) =
+    control.handle((req) ->
+        req.param("ref") match
+            None -> Pass
+            Some(name) ->
+                if name == "ok"
+                    Forward(req.rewritten(req.path, "x=40.5&y=20"))
+                else
+                    Respond(error_response(409, f"nothing is called $name")))
+
+@test
+a_forwarded_click_is_frame_for_frame_the_click_a_client_sends()
+    val sent = trace_of("POST", "/click", "x=40.5&y=20&button=right&clicks=2", no_routes)
+    val forwarded = trace_of("POST", "/click?ref=ok", "button=right&clicks=2", by_name)
+
+    assert(sent.starts_with("1: move") && sent.contains("\n5: move held=0 at 40.5,20"), "the pointer travels over five frames")
+    assert(sent.ends_with("13: up right=true clicks=2 at 40.5,20 mine=true\n13: answered 200"), "the answer comes with the last release")
+    assert(sent.contains("down right=true clicks=2"), sent)
+    assert(sent.contains("answered 200"), sent)
+    assert_eq(forwarded, sent, "the same events in the same frames, and the answer in the same frame")
+
+@test
+the_answer_to_a_forwarded_click_waits_for_its_last_event()
+    val t = trace_of("POST", "/click?ref=ok", "", by_name)
+    val lines = sysl.text.split(t, "\n")
+
+    assert(lines.len >= 2, t)
+    val last = lines[lines.len - 1]
+    val release = lines[lines.len - 2]
+
+    assert(last.contains("answered 200"), t)
+    assert(release.contains("up right=false"), "the release comes before it")
+
+    val release_frame = sysl.text.parse_int(sysl.text.split(release, ":")[0]).unwrap()
+    val answer_frame = sysl.text.parse_int(sysl.text.split(last, ":")[0]).unwrap()
+
+    assert(answer_frame >= release_frame, t)
+    assert(release_frame >= 3, "the hold of 30 ms took frames of its own")
+    assert(!t.contains("something else"), t)
+
+@test
+a_forwarded_drag_is_frame_for_frame_the_drag_a_client_sends()
+    val sent = trace_of("POST", "/drag", "from=1,2&to=40.5,20&duration=60", no_routes)
+    val forwarded = trace_of("POST", "/drag?ref=ok", "from=1,2&duration=60", (control) ->
+        control.handle((req) ->
+            if req.param("ref") == Some("ok") then Forward(req.rewritten("/drag", "to=40.5,20")) else Pass))
+
+    assert(sent.contains("answered 200"), sent)
+    assert_eq(forwarded, sent)
+
+@test
+a_route_answers_a_name_it_does_not_know_with_a_conflict()
+    up()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    var clock: long = 0
+
+    by_name(control)
+
+    val cl = ask(control, &clock, "POST", "/click?ref=nope")
+
+    assert(from_utf8_lossy(cl.got.view()).starts_with("HTTP/1.1 409 Conflict\r\n"), "the status and its words")
+    assert_eq(body_text(cl), "{\"error\":\"nothing is called nope\"}\n")
+    assert_eq(events().len(), 0usize, "and nothing went in")
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+forwarding_is_refused_as_a_client_would_be()
+    up()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    var clock: long = 0
+
+    control.handle((req) ->
+        req.path match
+            "/tap" -> Forward(req.rewritten("/no-such-command", req.query))
+            "/peek" -> Forward(req.rewritten("/click", "x=1&y=1"))
+            "/bad" -> Forward(req.rewritten("/click", "x=wide&y=1"))
+            _ -> Pass)
+
+    val unknown = ask(control, &clock, "POST", "/tap?x=1&y=1")
+
+    assert_eq(status_of(unknown), 404, "a built-in that is not there")
+    assert_eq(body_text(unknown), "{\"error\":\"no such route: /no-such-command\"}\n", "named by the path it was forwarded to")
+    assert_eq(status_of(ask(control, &clock, "GET", "/peek")), 405, "the method is the request's own")
+    assert_eq(status_of(ask(control, &clock, "POST", "/bad")), 400, "and the parameters are checked as a client's")
+    assert_eq(events().len(), 0usize, "none of them put anything in")
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+a_forwarded_request_goes_to_the_built_ins_and_not_back_through_the_routes()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    var clock: long = 0
+
+    control.route((req) -> if req.path == "/first" then Some(text(200, "first")) else None)
+    control.handle((req) ->
+        req.path match
+            "/first" -> Respond(text(200, "never"))
+            "/go" -> Forward(req.rewritten("/click", "x=3&y=4"))
+            "/state" -> Respond(text(200, "mine"))
+            _ -> Pass)
+    control.route((req) -> if req.path == "/click" || req.path == "/later" then Some(text(200, "caught")) else None)
+
+    assert_eq(body_text(ask(control, &clock, "GET", "/first")), "first", "routes of both kinds are asked in the order added")
+    assert_eq(body_text(ask(control, &clock, "GET", "/state")), "mine", "a handler may replace a command")
+    assert_eq(body_text(ask(control, &clock, "GET", "/later")), "caught", "Pass leaves it to the next route")
+
+    val went = ask(control, &clock, "POST", "/go")
+
+    assert_eq(status_of(went), 200)
+    assert(body_text(went) != "caught", "the route after it never saw the forwarded click")
+    assert_eq(events().len(), 3usize, "the click went in")
+    assert_eq(body_text(ask(control, &clock, "POST", "/click", "x=1&y=1")), "caught", "while a client's own is still routed")
     control.close()
     remove_dir_all(dir).unwrap()
 

@@ -53,6 +53,12 @@ struct Request
             Some(v) -> Some(v)
             None -> form_value(self.body.view(), name)
     end param
+
+    /** This request sent to `path` with `query` in place of its own: the method, headers and body are
+     * kept, so a parameter the new query does not name is still read from the body. `query` is
+     * form-encoded, as a client's would be.
+     */
+    rewritten(self, path: string, query: string) -> Request = Request(self.method, path, query, self.headers, self.body)
 end Request
 
 /** What `parse_request` makes of the bytes so far. */
@@ -320,16 +326,27 @@ text(status: int, body: string) -> Response = bytes(status, "text/plain; charset
 error_response(status: int, reason: string) -> Response =
     json(status, f"{\"error\":${quoted(reason)}}\n")
 
-/** The words that go with a status this module answers. */
+/** The words that go with a status: every one this module answers, and the common ones a route might. */
 reason_phrase(status: int) -> string
     status match
         200 -> "OK"
+        201 -> "Created"
+        202 -> "Accepted"
+        204 -> "No Content"
         400 -> "Bad Request"
+        401 -> "Unauthorized"
+        403 -> "Forbidden"
         404 -> "Not Found"
         405 -> "Method Not Allowed"
         408 -> "Request Timeout"
+        409 -> "Conflict"
+        410 -> "Gone"
         413 -> "Content Too Large"
+        415 -> "Unsupported Media Type"
+        422 -> "Unprocessable Content"
+        429 -> "Too Many Requests"
         500 -> "Internal Server Error"
+        501 -> "Not Implemented"
         503 -> "Service Unavailable"
         _ -> "Unknown"
 end reason_phrase

@@ -145,13 +145,30 @@ private enum Step
 
 private now_ms() -> long = whole_micros(monotonic()) / 1000
 
+/** What a route added with `handle` makes of a request. */
+enum Routed
+    /** Answer it with this. */
+    Respond(r: Response)
+    /** Hand this request to the built-in commands instead, which run it exactly as if a client had
+     * sent it: a `/click` queues its steps and the client is answered when they are done. It does not
+     * go back through the routes. `Request.rewritten` makes one.
+     */
+    Forward(req: Request)
+    /** Leave it to the next route, and then to the built-in commands. */
+    Pass
+
+// A route, as either kind was added.
+private enum Handler
+    Answers(f: &Fn(Request) -> Option[Response])
+    Routes(f: &Fn(Request) -> Routed)
+
 /** The live control of a program. Made with `listen`. */
 struct Control
     private hold: &Hold
     private window: Option[&Window]
     private opts: Options
     private conns: Buf[&Conn]
-    private routes: Buf[&Fn(Request) -> Option[Response]]
+    private routes: Buf[Handler]
     private steps: Buf[Step]
     private head: usize
     private shots: Buf[&Conn]
@@ -169,7 +186,26 @@ struct Control
      * passes it on with `None`; what no route takes goes to the built-in commands. It runs inside
      * `poll`, on the frame loop's thread, so it may read the program's state and should be quick.
      */
-    route(&self, f: &Fn(Request) -> Option[Response]) = self.routes.push(f)
+    route(&self, f: &Fn(Request) -> Option[Response]) = self.routes.push(Answers(f))
+
+    /** Add a route that may also forward. `f` is asked in the same order as `route`'s, and answers
+     * with `Respond`, hands a rewritten request to the built-in commands with `Forward`, or passes it
+     * on with `Pass`. Forwarding is how a layer above adds its own way of naming a command's target:
+     *
+     *     control.handle((req) ->
+     *         if req.path != "/click" then return Pass
+     *
+     *         req.param("ref") match
+     *             None -> Pass
+     *             Some(name) -> where_is(name) match
+     *                 Some((x, y)) -> Forward(req.rewritten("/click", f"x=$x&y=$y"))
+     *                 None -> Respond(error_response(409, f"nothing is called $name")))
+     *
+     * A forwarded `/click` produces the same events, frame for frame, as one the client sent with
+     * those coordinates, and the client is answered when they are done. A path no built-in has is a
+     * 404, and the wrong method a 405, as for a client's own.
+     */
+    handle(&self, f: &Fn(Request) -> Routed) = self.routes.push(Routes(f))
 
     /** Where the controlled pointer is, and whether it is pressed. */
     pointer(&self) -> Pointer = self.ptr
@@ -313,14 +349,25 @@ struct Control
 
     private dispatch(&self, conn: &Conn, req: Request, now: long)
         for i in 0..<self.routes.len()
-            val f = self.routes.at(i)
+            self.routes.at(i) match
+                Answers(f) -> f(req) match
+                    Some(r) ->
+                        self.respond(conn, r, now)
+                        return
+                    None -> ()
+                Routes(f) -> f(req) match
+                    Respond(r) ->
+                        self.respond(conn, r, now)
+                        return
+                    Forward(other) ->
+                        self.builtin(conn, other, now)
+                        return
+                    Pass -> ()
 
-            f(req) match
-                Some(r) ->
-                    self.respond(conn, r, now)
-                    return
-                None -> ()
+        self.builtin(conn, req, now)
+    end dispatch
 
+    private builtin(&self, conn: &Conn, req: Request, now: long)
         val allow = builtin_method(req.path)
 
         if allow == ""
@@ -348,7 +395,7 @@ struct Control
             Ok(Some(r)) -> self.respond(conn, r, now)
             Ok(None) -> ()
             Err(reason) -> self.respond(conn, error_response(400, reason), now)
-    end dispatch
+    end builtin
 
     // The steps of a command go on the queue together, with the answer last. The connection waits.
     private queue_shot(&self, conn: &Conn, now: long) -> Result[Option[Response], string]

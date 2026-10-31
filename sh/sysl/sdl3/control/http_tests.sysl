@@ -241,8 +241,21 @@ a_response_is_written_exactly()
 
 @test
 every_status_answered_has_its_words()
-    val statuses = [200, 400, 404, 405, 408, 413, 500, 503]
-    val words = ["OK", "Bad Request", "Not Found", "Method Not Allowed", "Request Timeout", "Content Too Large", "Internal Server Error", "Service Unavailable"]
+    val statuses = [200, 201, 202, 204, 400, 401, 403, 404, 405, 408, 409, 410, 413, 415, 422, 429, 500, 501, 503]
+    val words = ["OK", "Created", "Accepted", "No Content", "Bad Request", "Unauthorized", "Forbidden", "Not Found",
+        "Method Not Allowed", "Request Timeout", "Conflict", "Gone", "Content Too Large", "Unsupported Media Type",
+        "Unprocessable Content", "Too Many Requests", "Internal Server Error", "Not Implemented", "Service Unavailable"]
 
     for i in 0..<statuses.len
         assert_eq(reason_phrase(statuses[i]), words[i])
+
+@test
+a_conflict_is_written_with_its_words()
+    val head = from_utf8_lossy(write_response(error_response(409, "two")).view())
+
+    assert(head.starts_with("HTTP/1.1 409 Conflict\r\n"), head)
+
+@test
+a_status_without_words_is_unknown()
+    assert_eq(reason_phrase(299), "Unknown")
+    assert_eq(reason_phrase(418), "Unknown")
