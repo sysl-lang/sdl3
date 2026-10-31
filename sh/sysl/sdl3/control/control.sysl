@@ -34,11 +34,12 @@ import sysl.fs.{Kind, link_metadata, make_dir, remove_dir, remove_file, rename, 
 import sysl.net.{Shutdown, Socket, UnixListener, unix, unix_connect, unix_listen, would_block}
 import sysl.path.join
 import sysl.posix.time.monotonic
+import sysl.raw.ptr_cast
 import sysl.signal.{PIPE, ignore}
 import sysl.text.{CString, Search, cstring,join as join_strings, parse_f32, parse_int, split}
 import sysl.time.whole_micros
 import sh.sysl.png
-import sh.sysl.sdl3.{EventKind, KMOD_ALT, KMOD_CTRL, KMOD_GUI, KMOD_LALT, KMOD_LCTRL, KMOD_LGUI, KMOD_LSHIFT, KMOD_SHIFT, MouseButton, PixelFormat, Renderer, SCANCODE_LALT, SCANCODE_LCTRL, SCANCODE_LGUI, SCANCODE_LSHIFT, Surface, WINDOW_HIDDEN, Window, error, flush_events, key_event, mod_state, mouse_button_event, mouse_motion_event, push_event, scancode_from_name, set_mod_state, text_input_event}
+import sh.sysl.sdl3.{EVENT_KEY_DOWN, EVENT_KEY_UP, EVENT_MOUSE_BUTTON_DOWN, EVENT_MOUSE_BUTTON_UP, EVENT_MOUSE_MOTION, EVENT_MOUSE_WHEEL, EVENT_TEXT_EDITING, EVENT_TEXT_INPUT, EventKind,KMOD_ALT, KMOD_CTRL, KMOD_GUI, KMOD_LALT, KMOD_LCTRL, KMOD_LGUI, KMOD_LSHIFT, KMOD_SHIFT, MouseButton, PixelFormat, Renderer, SCANCODE_LALT, SCANCODE_LCTRL, SCANCODE_LGUI, SCANCODE_LSHIFT, Surface, WINDOW_HIDDEN, Window, error, flush_events, key_event, mod_state, mouse_button_event, mouse_motion_event, push_event, scancode_from_name, set_mod_state, text_input_event}
 import sh.sysl.sdl3.c
 
 // The file mode bits that say an entry is a socket.
@@ -145,6 +146,87 @@ private enum Step
 
 private now_ms() -> long = whole_micros(monotonic()) / 1000
 
+// ## Keeping the real mouse and keyboard out of a gesture
+//
+// Every event this module pushes carries `control_tag` in its reserved word, which SDL leaves alone and
+// sets to zero on the events it makes. While a gesture is in progress an SDL event filter drops the
+// untagged mouse (or keyboard) events for the window, so a person's hand on the real mouse cannot pull
+// the controlled pointer away. SDL holds one filter, so the program's own is remembered and called for
+// whatever this one lets through, and put back when the gesture is over. Nothing is installed between
+// gestures.
+
+private val control_tag: u32 = 0x434F4E54
+
+private var mute_mouse: bool = false
+private var mute_keys: bool = false
+private var mute_window: u32 = 0
+private var filter_installed: bool = false
+private var prior_filter: *extern(*u8, *c.Event) -> bool = null
+private var prior_data: *u8 = null
+
+private is_mouse_kind(kind: u32) -> bool = kind == EVENT_MOUSE_MOTION || kind == EVENT_MOUSE_BUTTON_DOWN || kind == EVENT_MOUSE_BUTTON_UP || kind == EVENT_MOUSE_WHEEL
+
+private is_key_kind(kind: u32) -> bool = kind == EVENT_KEY_DOWN || kind == EVENT_KEY_UP || kind == EVENT_TEXT_INPUT || kind == EVENT_TEXT_EDITING
+
+// Whether the filter drops this event. All of these begin with the same window id.
+private muted(ev: *c.Event) -> bool
+    if ev[0].reserved == control_tag then return false
+
+    val kind = ev[0].kind
+
+    if !(mute_mouse && is_mouse_kind(kind)) && !(mute_keys && is_key_kind(kind)) then return false
+
+    val view: *c.KeyboardEvent = ptr_cast(ev)
+
+    mute_window == 0 || view[0].window_id == mute_window
+end muted
+
+private filter_trampoline(ud: *u8, ev: *c.Event) -> bool
+    if muted(ev) then return false
+
+    if prior_filter != null then return prior_filter(prior_data, ev)
+
+    true
+end filter_trampoline
+
+private install_filter()
+    if filter_installed then return
+
+    var f: *extern(*u8, *c.Event) -> bool = null
+    var d: *u8 = null
+
+    _ = c.get_event_filter(&f, &d)
+    prior_filter = f
+    prior_data = d
+    c.set_event_filter(&filter_trampoline, null)
+    filter_installed = true
+end install_filter
+
+// Stop dropping anything, and give SDL back the filter the program had.
+private release_filter()
+    mute_mouse = false
+    mute_keys = false
+
+    if !filter_installed then return
+
+    c.set_event_filter(prior_filter, prior_data)
+    prior_filter = null
+    prior_data = null
+    filter_installed = false
+end release_filter
+
+// Whether a step is a pointer's or a keyboard's: 1 or 2, and 0 for one that is neither.
+private step_class(s: Step) -> int
+    s match
+        Glide(_, _, _) -> 1
+        Press(_, _, _) -> 1
+        Key(_, _, _) -> 2
+        Typed(_) -> 2
+        Pause(_) -> 0
+        Frames(_) -> 0
+        Finish(_) -> 0
+end step_class
+
 /** What a route added with `handle` makes of a request. */
 enum Routed
     /** Answer it with this. */
@@ -181,6 +263,9 @@ struct Control
     private frames_left: long
     private refused: bool
     private ptr: Pointer
+    private mute_real: bool
+    private tail_mouse: bool
+    private tail_keys: bool
 
     /** Add routes. `f` sees every request first, in the order routes were added, and answers it or
      * passes it on with `None`; what no route takes goes to the built-in commands. It runs inside
@@ -232,10 +317,61 @@ struct Control
         self.frames += 1
         self.accept_new(now)
         self.read_requests(now)
+
+        val before = self.pending_class()
+
         self.advance(now)
+
+        val after = self.pending_class()
+
+        self.apply_mute(before, after)
         self.write_responses(now)
         self.sweep(now)
     end poll_at
+
+    /** Whether the real mouse and keyboard may reach the program while a command is pushing events.
+     * They may not by default: from the frame a gesture is queued until one frame after its last event,
+     * real mouse motion, buttons and wheel for the window are dropped while a pointer command runs, and
+     * real keys and text while a key or type command runs, so a person watching with a hand on the
+     * mouse cannot disturb it. `real_input(true)` lets everything through, now and from then on.
+     */
+    real_input(&self, allowed: bool)
+        self.mute_real = !allowed
+        self.tail_mouse = false
+        self.tail_keys = false
+
+        if allowed then release_filter()
+    end real_input
+
+    // Which kinds of step are still queued, as bits: 1 for the pointer's, 2 for the keyboard's.
+    private pending_class(&self) -> int
+        var bits = 0
+
+        for i in self.head..<self.steps.len() do bits |= step_class(self.steps[i])
+
+        bits
+    end pending_class
+
+    // Decide, for the events this frame's drain will see, what the filter drops: a kind of input is held
+    // off while a step of it is queued, and for one frame after the last.
+    private apply_mute(&self, before: int, after: int)
+        if !self.mute_real then return
+
+        val bits = before | after
+        val mouse = (bits & 1) != 0 || self.tail_mouse
+        val keys = (bits & 2) != 0 || self.tail_keys
+
+        self.tail_mouse = (bits & 1) != 0
+        self.tail_keys = (bits & 2) != 0
+
+        if mouse || keys
+            mute_window = self.window_id()
+            mute_mouse = mouse
+            mute_keys = keys
+            install_filter()
+        else
+            release_filter()
+    end apply_mute
 
     /** Whether a `GET /shot` is waiting. A program drawing with the GPU asks this and then reads its
      * frame back only when it is true, and hands it to `deliver_rgba`.
@@ -273,6 +409,7 @@ struct Control
      * too; doing it twice does nothing.
      */
     close(&self)
+        release_filter()
         teardown(self.hold, self.conns, self.typed)
         self.shots.clear()
         self.steps.clear()
@@ -625,7 +762,7 @@ struct Control
     end window_id
 
     private push_checked(&self, e: sh.sysl.sdl3.Event)
-        if !push_event(e) then self.refused = true
+        if !push_event(e.tagged(control_tag)) then self.refused = true
     end push_checked
 
     private push_motion(&self, x: f32, y: f32)
@@ -731,7 +868,10 @@ struct Control
 end Control
 
 impl Drop for Control
-    drop(self) = teardown(self.hold, self.conns, self.typed)
+    drop(self)
+        release_filter()
+        teardown(self.hold, self.conns, self.typed)
+    end drop
 
 private teardown(hold: &Hold, conns: Buf[&Conn], typed: Buf[CString])
     if hold.closed then return
@@ -1026,7 +1166,7 @@ listen(path: string, window: Option[&Window] = None, opts: Options = options()) 
     val blank = Pointer(0.0, 0.0, false, MouseButton.Left, false)
     val hold: &Hold = Hold(listener, path, false)
 
-    Ok(Control(hold, window, opts, buf(), buf(), buf(), 0, buf(), buf(), [0; 16384], 0, -1, 0.0, 0.0, 0, false, blank))
+    Ok(Control(hold, window, opts, buf(), buf(), buf(), 0, buf(), buf(), [0; 16384], 0, -1, 0.0, 0.0, 0, false, blank, true, false, false))
 end listen
 
 private bind_private(dir: string, inner: string, address: sysl.net.UnixAddress, path: string) -> Result[UnixListener, ControlError]

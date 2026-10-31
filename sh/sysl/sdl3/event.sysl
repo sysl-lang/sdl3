@@ -306,6 +306,19 @@ struct Event
     // When it happened, in the same nanoseconds `ticks_ns` counts.
     timestamp(self) -> u64 = self.rec.timestamp
 
+    // The word SDL reserves in every event and leaves alone: zero on every event SDL makes, and
+    // whatever `tagged` put there on one a program made. It is how a library tells the events it pushed
+    // from the ones the platform delivered.
+    tag(self) -> u32 = self.rec.reserved
+
+    // This event with `tag` in its reserved word.
+    tagged(self, tag: u32) -> Event
+        var r = self.rec
+
+        r.reserved = tag
+        Event(r)
+    end tagged
+
     // ## Keyboard
 
     private key(self) -> c.KeyboardEvent = arm(self.rec)

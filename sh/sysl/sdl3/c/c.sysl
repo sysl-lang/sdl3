@@ -462,7 +462,9 @@ extern "SDL_PushEvent" push_event(event: *Event) -> bool
 extern "SDL_RegisterEvents" register_events(count: i32) -> u32
 extern "SDL_PumpEvents" pump_events()
 extern "SDL_FlushEvents" flush_events(min: u32, max: u32)
-extern "SDL_AddEventWatch" add_event_watch(f: *extern(*u8, *Event) -> bool, ud: *u8) -> bool
+extern "SDL_SetEventFilter" set_event_filter(f: *extern(*u8, *Event) -> bool, ud: *u8)
+extern "SDL_GetEventFilter" get_event_filter(f: **extern(*u8, *Event) -> bool, ud: **u8) -> bool
+extern "SDL_AddEventWatch"add_event_watch(f: *extern(*u8, *Event) -> bool, ud: *u8) -> bool
 extern "SDL_RemoveEventWatch" remove_event_watch(f: *extern(*u8, *Event) -> bool, ud: *u8)
 
 // ## Keyboard and mouse

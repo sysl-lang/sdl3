@@ -10,7 +10,7 @@ on-screen keyboard, and the lifecycle events an app is stopped and restarted by.
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.20" }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.21" }
 }
 ```
 
@@ -631,6 +631,18 @@ Parameters are form-encoded or in the query. A key is SDL's name for it in any c
 gone in, so a `/shot` that follows it shows what it did. Bad input is a 400, 404, 405, 408 or 413
 carrying `{"error": …}`.
 
+**The real mouse and keyboard are held off while a command runs.** A person watching often has a hand on
+the mouse over the window, and its motion would otherwise land between the controlled events and pull
+the pointer away mid-drag. From the frame a command is queued until one frame after its last event,
+the real mouse motion, buttons and wheel for the control's window (every window when it has none) are
+dropped while a pointer command (`/click`, `/drag`) runs, and the real keys and text while a `/key` or
+`/type` runs; the other device is left alone. Before and after, everything passes. Controlled events
+carry a tag in the event's reserved word (`Event.tag()`, zero on every event SDL makes), which is what
+tells them apart, and the filter is an SDL event filter installed only while it is needed, calling the
+program's own filter for whatever it lets through and putting it back afterwards. **No change to the
+program's event loop is needed.** `control.real_input(true)` turns it off and lets everything through;
+the default is held off.
+
 **The input is watchable, and it is real.** Everything goes in by `SDL_PushEvent`, at most one event a
 frame, so the program cannot tell it from a mouse and keyboard, and what would flash by takes the time
 a person takes: `Options` sets how long the pointer takes to arrive, how long a press is held and how
@@ -746,7 +758,7 @@ SDL's queue, and `pumped` from `sh.sysl.kairos.pump` composes it with any kairos
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.20", features = [kairos] }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.21", features = [kairos] }
   kairos { git = "github.com/sysl-lang/kairos", version = "0.1.7" }
 }
 ```

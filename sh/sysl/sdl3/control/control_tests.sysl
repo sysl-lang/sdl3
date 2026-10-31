@@ -13,7 +13,8 @@ import sysl.path.join
 import sysl.process
 import sysl.text.{Search, from_utf8_lossy, join as join_lines, repeat}
 import sh.sysl.png
-import sh.sysl.sdl3.{Color, Event, EventKind, HINT_VIDEO_DRIVER, INIT_VIDEO, KMOD_LCTRL, KMOD_LSHIFT, MouseButton, SCANCODE_A, SCANCODE_LCTRL, SCANCODE_LSHIFT, SCANCODE_RETURN, WINDOW_HIDDEN, Window, create_window, init, key_name, mod_state, poll_event, quit, set_hint}
+import sh.sysl.sdl3.{Color, Event, EventKind, HINT_VIDEO_DRIVER, INIT_VIDEO, KMOD_LCTRL, KMOD_LSHIFT, MouseButton, SCANCODE_A, SCANCODE_LCTRL, SCANCODE_LSHIFT, SCANCODE_RETURN, WINDOW_HIDDEN, Window, create_window, init, EVENT_MOUSE_BUTTON_UP, key_event, key_name, mod_state, mouse_motion_event, poll_event, push_event, quit, set_hint}
+import sh.sysl.sdl3.c
 
 private up() = assert(begin(), "SDL came up headless")
 
@@ -1541,6 +1542,227 @@ a_shot_taken_after_a_command_shows_what_it_did()
 
     assert_rgb(png.decode(body_of(cl)).unwrap().at(0, 0), 255, 255, 255, "the frame after the release")
     control.close()
+    remove_dir_all(dir).unwrap()
+
+// ## The real mouse and keyboard stay out of a gesture
+
+private struct Seen
+    controlled: Buf[EventKind]
+    first_real_mouse: int
+    first_real_key: int
+    last_controlled: int
+
+// Every frame a "real" mouse motion and key press arrive, pushed the way SDL delivers a real one: with
+// no tag, and the id of a mouse that is not the controlled one. The frame each kind first gets through
+// is recorded, and the kinds of the controlled events with the frame of the last.
+private run_frames(control: &Control, frames: int, window_id: u32 = 0) -> Seen
+    var s = Seen(buf(), -1, -1, -1)
+
+    for f in 0..<frames
+        control.poll_at(long(f) * 10)
+        _ = push_event(mouse_motion_event(window_id, 7, 0, 9999, 9999, 0, 0))
+        _ = push_event(key_event(window_id, 7, SCANCODE_A, 97, 0, true))
+
+        val got = events()
+
+        for i in 0..<got.len()
+            val e = got.at(i)
+
+            if e.tag() != 0
+                s.controlled.push(e.kind())
+                s.last_controlled = f
+            else
+                e.kind() match
+                    EventKind.MouseMotion -> if s.first_real_mouse < 0 then s.first_real_mouse = f
+                    EventKind.KeyDown -> if s.first_real_key < 0 then s.first_real_key = f
+                    _ -> panic("a real event nobody pushed")
+
+    s
+end run_frames
+
+@test
+real_mouse_events_do_not_mix_into_a_controlled_drag_and_come_back_after_it()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+
+    // Before any gesture, a real event arrives.
+    assert(push_event(mouse_motion_event(0, 7, 0, 5, 5, 0, 0)))
+    assert_eq(events().len(), 1usize, "nothing is held off before a gesture")
+
+    val cl = request(at, "POST", "/drag", "from=100,50&to=200,250&duration=0")
+    val s = run_frames(control, 20)
+
+    assert_eq(s.controlled.len(), 4usize, "the move, the press, the move and the release all arrive")
+    assert_eq(s.controlled.at(0), EventKind.MouseMotion)
+    assert_eq(s.controlled.at(1), EventKind.MouseButtonDown)
+    assert_eq(s.controlled.at(2), EventKind.MouseMotion)
+    assert_eq(s.controlled.at(3), EventKind.MouseButtonUp)
+    assert(s.first_real_mouse >= s.last_controlled + 2, f"real motion waits one frame past the last event: ${s.first_real_mouse} vs ${s.last_controlled}")
+    assert(s.first_real_key >= 0 && s.first_real_key < s.first_real_mouse, "a drag does not hold the keyboard off")
+
+    var clock: long = 1000
+
+    finish(control, cl, &clock)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+real_keys_do_not_mix_into_typed_text_and_the_mouse_is_left_alone()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    val cl = request(at, "POST", "/type", "text=ab")
+    val s = run_frames(control, 20)
+
+    assert_eq(s.controlled.len(), 2usize, "both characters arrive")
+    assert_eq(s.controlled.at(0), EventKind.TextInput)
+    assert_eq(s.controlled.at(1), EventKind.TextInput)
+    assert(s.first_real_key >= s.last_controlled + 2, "real keys wait one frame past the last character")
+    assert_eq(s.first_real_mouse, 0, "typing does not hold the mouse off")
+
+    var clock: long = 1000
+
+    finish(control, cl, &clock)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+real_keys_do_not_mix_into_a_controlled_key()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    val cl = request(at, "POST", "/key", "key=a")
+    val s = run_frames(control, 20)
+
+    assert_eq(s.controlled.len(), 2usize, "the press and the release")
+    assert_eq(s.controlled.at(0), EventKind.KeyDown)
+    assert_eq(s.controlled.at(1), EventKind.KeyUp)
+    assert(s.first_real_key >= s.last_controlled + 2)
+
+    var clock: long = 1000
+
+    finish(control, cl, &clock)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+turning_it_off_lets_every_real_event_through_a_gesture()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+
+    control.real_input(true)
+
+    val cl = request(at, "POST", "/drag", "from=100,50&to=200,250&duration=0")
+    val s = run_frames(control, 20)
+
+    assert_eq(s.controlled.len(), 4usize)
+    assert_eq(s.first_real_mouse, 0, "the real mouse arrives from the first frame")
+    assert_eq(s.first_real_key, 0)
+
+    var clock: long = 1000
+
+    finish(control, cl, &clock)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+only_the_controlled_windows_events_are_held_off()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val window = create_window("m", 320, 200, WINDOW_HIDDEN).unwrap()
+    val control = listen(at, Some(window), instant()).unwrap()
+    val cl = request(at, "POST", "/drag", "from=10,10&to=20,20&duration=0")
+    val mine = run_frames(control, 20, window.id())
+
+    assert(mine.first_real_mouse >= mine.last_controlled + 2, "the window's own real events are held off")
+
+    val cl2 = request(at, "POST", "/drag", "from=10,10&to=20,20&duration=0")
+    val other = run_frames(control, 20, window.id() + 100)
+
+    assert_eq(other.first_real_mouse, 0, "another window's events are not")
+
+    var clock: long = 1000
+
+    finish(control, cl, &clock)
+    finish(control, cl2, &clock)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+private var app_saw: int = 0
+private var app_kinds: Buf[u32] = buf()
+
+private app_filter(ud: *u8, ev: *c.Event) -> bool
+    if ev[0].reserved != 0
+        app_saw += 1
+        app_kinds.push(ev[0].kind)
+
+    true
+end app_filter
+
+@test
+the_programs_own_event_filter_still_runs_and_is_put_back()
+    up()
+    empty_queue()
+    app_saw = 0
+    app_kinds.clear()
+    c.set_event_filter(&app_filter, null)
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    val cl = request(at, "POST", "/drag", "from=100,50&to=200,250&duration=0")
+    val s = run_frames(control, 20)
+
+    assert_eq(s.controlled.len(), 4usize)
+    // SDL runs a newly set filter over the events already queued, so a count is not exact; the release
+    // is pushed while the guard is in place and reaches the program's filter only by being chained to.
+    var releases = 0
+
+    for i in 0..<app_kinds.len() do if app_kinds.at(i) == EVENT_MOUSE_BUTTON_UP then releases += 1
+
+    assert(releases >= 1, "the program's filter sees what the guard lets through")
+
+    var f: *extern(*u8, *c.Event) -> bool = null
+    var d: *u8 = null
+
+    _ = c.get_event_filter(&f, &d)
+    assert(f == &app_filter, "the program's filter is SDL's again once the gesture is over")
+
+    var clock: long = 1000
+
+    finish(control, cl, &clock)
+    control.close()
+    c.set_event_filter(null, null)
+    remove_dir_all(dir).unwrap()
+
+@test
+closing_in_the_middle_of_a_gesture_lets_real_events_through_again()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, Options(0, 0, 0)).unwrap()
+    val cl = request(at, "POST", "/drag", "from=100,50&to=200,250&duration=0")
+
+    control.poll_at(0)
+    control.poll_at(1)
+    empty_queue()
+    assert(!push_event(mouse_motion_event(0, 7, 0, 1, 1, 0, 0)), "held off while the gesture is queued")
+    control.close()
+    assert(push_event(mouse_motion_event(0, 7, 0, 1, 1, 0, 0)), "and not once control is closed")
+    assert_eq(events().len(), 1usize)
+    _ = cl.socket.close()
     remove_dir_all(dir).unwrap()
 
 private event_list() -> []Event = events().view()
