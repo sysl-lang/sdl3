@@ -1167,13 +1167,14 @@ an_audio_stream_takes_samples()
 
     for i in 0..<480usize do samples[i] = 0.5
 
+    // Paused first, so the device thread cannot drain the buffer before it is counted.
+    assert(s.pause(), "paused")
     assert(s.put(samples), "queued a buffer")
-    assert(s.queued() > 0, "and the device has not taken it all yet")
+    assert(s.queued() > 0, "and the paused device has not taken it")
     assert(s.set_gain(0.5), "set the gain")
     assert_eq(s.gain(), 0.5f32, "which came back")
     assert(s.clear(), "cleared it")
     assert_eq(s.queued(), 0i32, "and nothing is queued")
-    assert(s.pause(), "paused")
     assert(s.resume(), "resumed")
 
 // Wait for a recording stream to have something, at most a second, and answer what it has.
