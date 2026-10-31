@@ -16,7 +16,7 @@ import sysl.time.whole_micros
 import sysl.process
 import sysl.text.{Search, from_utf8_lossy, join as join_lines, repeat}
 import sh.sysl.png
-import sh.sysl.sdl3.{Color, Event, EventKind, HINT_VIDEO_DRIVER, INIT_VIDEO, KMOD_LCTRL, KMOD_LSHIFT, MouseButton, SCANCODE_A, SCANCODE_LCTRL, SCANCODE_LSHIFT, SCANCODE_RETURN, WINDOW_HIDDEN, Window, create_window, init, EVENT_MOUSE_BUTTON_UP, key_event, key_name, mod_state, mouse_motion_event, poll_event, push_event, quit, set_hint}
+import sh.sysl.sdl3.{Color, Event, EventKind, HINT_VIDEO_DRIVER, INIT_VIDEO, KMOD_LALT, KMOD_LCTRL, KMOD_LGUI, KMOD_LSHIFT, MouseButton, SCANCODE_A, SCANCODE_LALT, SCANCODE_LCTRL, SCANCODE_LGUI, SCANCODE_LSHIFT, SCANCODE_RETURN, WINDOW_HIDDEN, Window, create_window, init, EVENT_MOUSE_BUTTON_UP, key_event, key_name, mod_state, mouse_motion_event, poll_event, push_event, quit, set_hint}
 import sh.sysl.sdl3.c
 
 private up() = assert(begin(), "SDL came up headless")
@@ -534,6 +534,202 @@ a_hold_keeps_a_click_down_for_its_time()
     var clock: long = 160
 
     finish(control, cl, &clock)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+// What the program saw of one frame's event: its kind, and what SDL answered for the modifiers then.
+private struct Heard
+    kind: EventKind
+    mods: u16
+
+// Run a command a frame at a time, as a program's loop would, and note SDL's modifier state at every
+// event, which is where a program reading modifiers during a mouse event gets them.
+private gesture(control: &Control, at: string, route_path: string, body: string) -> Buf[Heard]
+    var out: Buf[Heard] = buf()
+    val cl = request(at, "POST", route_path, body)
+    var clock: long = 0
+
+    for _ in 0..<200000
+        clock += 1
+        control.poll_at(clock)
+        drain(cl)
+
+        loop
+            poll_event() match
+                Some(e) -> out.push(Heard(e.kind(), mod_state()))
+                None -> break
+
+        if cl.over
+            assert_eq(status_of(cl), 200)
+            _ = cl.socket.close()
+            return out
+
+    panic("no answer came")
+end gesture
+
+// The mouse events of a gesture, with the modifier state each was seen under.
+private mouse_seen(all: Buf[Heard]) -> Buf[Heard]
+    var out: Buf[Heard] = buf()
+
+    for i in 0..<all.len()
+        val k = all.at(i).kind
+
+        if k == EventKind.MouseButtonDown || k == EventKind.MouseButtonUp || k == EventKind.MouseMotion
+            out.push(all.at(i))
+
+    out
+end mouse_seen
+
+@test
+every_modifier_name_is_accepted_and_each_comes_out_as_its_key()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    var clock: long = 0
+    val before = mod_state()
+    val names = ["shift", "ctrl", "alt", "gui", "cmd", "super", "meta"]
+    val bits = [KMOD_LSHIFT, KMOD_LCTRL, KMOD_LALT, KMOD_LGUI, KMOD_LGUI, KMOD_LGUI, KMOD_LGUI]
+    val keys = [SCANCODE_LSHIFT, SCANCODE_LCTRL, SCANCODE_LALT, SCANCODE_LGUI, SCANCODE_LGUI, SCANCODE_LGUI, SCANCODE_LGUI]
+
+    for i in 0..<7
+        assert_eq(status_of(ask(control, &clock, "POST", "/click", f"x=1&y=1&mods=${names[i]}")), 200, names[i])
+
+        val got = events()
+
+        assert_eq(got.len(), 5usize, f"${names[i]}: key down, move, press, release, key up")
+        assert_eq(got.at(0).kind(), EventKind.KeyDown)
+        assert_eq(got.at(0).key_scancode(), keys[i], names[i])
+        assert_eq(got.at(0).key_mod(), before | bits[i], names[i])
+        assert_eq(got.at(0).tag(), 0x434F4E54u32, "the modifier event is tagged like the rest")
+        assert_eq(got.at(4).kind(), EventKind.KeyUp)
+        assert_eq(got.at(4).key_scancode(), keys[i], names[i])
+        assert_eq(got.at(4).key_mod(), before, names[i])
+
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+modifiers_combine_whatever_the_separator_and_empty_means_none()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    var clock: long = 0
+    val before = mod_state()
+    val both = before | KMOD_LSHIFT | KMOD_LGUI
+
+    for spelling in ["shift,cmd", "shift+cmd", "shift%2Ccmd", "shift,,cmd,"]
+        assert_eq(status_of(ask(control, &clock, "POST", "/click", f"x=1&y=1&mods=$spelling")), 200, spelling)
+
+        val got = events()
+
+        assert_eq(got.len(), 7usize, spelling)
+        assert_eq(got.at(0).key_scancode(), SCANCODE_LSHIFT)
+        assert_eq(got.at(0).key_mod(), before | KMOD_LSHIFT)
+        assert_eq(got.at(1).key_scancode(), SCANCODE_LGUI)
+        assert_eq(got.at(1).key_mod(), both, spelling)
+        assert_eq(got.at(5).key_scancode(), SCANCODE_LGUI, "they come up in reverse")
+        assert_eq(got.at(5).key_mod(), before | KMOD_LSHIFT)
+        assert_eq(got.at(6).key_scancode(), SCANCODE_LSHIFT)
+        assert_eq(got.at(6).key_mod(), before)
+
+    assert_eq(status_of(ask(control, &clock, "POST", "/click", "x=1&y=1&mods=")), 200)
+    assert_eq(events().len(), 3usize, "an empty mods is no keys at all")
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+an_unknown_modifier_is_a_400_naming_it_and_nothing_goes_in()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    var clock: long = 0
+
+    for (route_path, body) in [("/click", "x=1&y=1&mods=shift,hyper"), ("/click", "x=1&y=1&mods=Shift"),
+                               ("/drag", "from=1,1&to=2,2&mods=nose")]
+        val cl = ask(control, &clock, "POST", route_path, body)
+
+        assert_eq(status_of(cl), 400, body)
+
+        val text = body_text(cl)
+
+        assert(text.contains("no modifier is named"), text)
+        assert(text.contains("hyper") || text.contains("Shift") || text.contains("nose"), "it names the word")
+
+    assert_eq(events().len(), 0usize, "a refused gesture queues no modifier either")
+    assert(!control.active())
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+the_program_sees_a_shift_during_the_click_and_not_after()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    val before = mod_state()
+    val seen = gesture(control, at, "/click", "x=5&y=6&mods=shift")
+    val mouse = mouse_seen(seen)
+
+    assert_eq(mouse.len(), 3usize, "a move, a press and a release")
+
+    for i in 0..<mouse.len()
+        assert_eq(mouse.at(i).mods, before | KMOD_LSHIFT, f"mouse event $i sees the shift")
+
+    assert_eq(mod_state(), before, "and it is gone afterwards")
+    assert_eq(seen.at(seen.len() - 1).mods, before, "from the last event on")
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+a_click_without_mods_after_a_shift_click_sees_none()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    val before = mod_state()
+
+    _ = gesture(control, at, "/click", "x=5&y=6&mods=shift,cmd")
+
+    val plain = mouse_seen(gesture(control, at, "/click", "x=7&y=8"))
+
+    assert_eq(plain.len(), 3usize)
+
+    for i in 0..<plain.len()
+        assert_eq(plain.at(i).mods, before, f"mouse event $i of the plain click")
+
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+a_drag_holds_its_modifiers_from_press_to_release()
+    up()
+    empty_queue()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at, None, instant()).unwrap()
+    val before = mod_state()
+    val seen = gesture(control, at, "/drag", "from=10,10&to=60,40&duration=50&mods=ctrl,alt")
+    val mouse = mouse_seen(seen)
+    val held = before | KMOD_LCTRL | KMOD_LALT
+
+    assert(mouse.len() >= 3usize)
+    assert_eq(mouse.at(0).mods, held)
+    assert_eq(mouse.at(mouse.len() - 1).kind, EventKind.MouseButtonUp)
+
+    for i in 0..<mouse.len()
+        assert_eq(mouse.at(i).mods, held, f"mouse event $i of the drag")
+
+    assert_eq(seen.at(0).kind, EventKind.KeyDown)
+    assert_eq(seen.at(seen.len() - 1).kind, EventKind.KeyUp)
+    assert_eq(mod_state(), before)
     control.close()
     remove_dir_all(dir).unwrap()
 

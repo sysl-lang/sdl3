@@ -10,7 +10,7 @@ on-screen keyboard, and the lifecycle events an app is stopped and restarted by.
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.22" }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.23" }
 }
 ```
 
@@ -620,11 +620,20 @@ curl --unix-socket $S http://app/shot -o shot.png
 | `GET /` | | this list, as text |
 | `GET /state` | | the frame, the pointer and the window, as JSON |
 | `GET /shot` | | the frame as a PNG, 503 if the program delivers none within five seconds |
-| `POST /click` | `x`, `y`, `button`, `clicks` | the pointer travels there, presses, holds, lets go |
-| `POST /drag` | `from=x,y`, `to=x,y`, `duration` (ms), `button` | it travels to `from`, presses, moves with the clock, lets go at `to` |
+| `POST /click` | `x`, `y`, `button`, `clicks`, `mods` | the pointer travels there, presses, holds, lets go |
+| `POST /drag` | `from=x,y`, `to=x,y`, `duration` (ms), `button`, `mods` | it travels to `from`, presses, moves with the clock, lets go at `to` |
 | `POST /key` | `key`, `mods` (`ctrl`, `shift`, `alt`, `gui`) | the modifiers go down, the key goes down and up, the modifiers come up |
 | `POST /type` | `text`, `pace` (ms) | a character at a time; a newline or tab is that key instead |
 | `POST /wait` | `frames` and/or `ms` | answered when the input queued before it has gone in and this has passed |
+
+**`mods` makes a shift-click.** `/click`, `/drag` and `/key` take `mods=shift,ctrl,alt,cmd` (any subset,
+comma-separated; `ctrl`, `shift`, `alt`, and `gui`/`cmd`/`super`/`meta` for the Command or Windows key; a
+form-encoded `shift+cmd` reads the same; an unknown word is a 400 naming it). The modifier keys go down
+as tagged key events before the gesture and come up after it, and SDL's modifier state
+(`mod_state()`, which is where a program reads modifiers during a mouse event, since a mouse event has no
+field for them) holds them for the whole gesture and is put back to what it was after the last event, so
+a click without `mods` right after a shift-click sees none. The real keyboard is held off for the
+gesture, as for `/key`.
 
 Parameters are form-encoded or in the query. A key is SDL's name for it in any case (`Return`, `a`,
 `F5`, `=`), and `enter`, `esc` and `del` work too. A command is answered when its last event has
@@ -635,8 +644,8 @@ carrying `{"error": …}`.
 the mouse over the window, and its motion would otherwise land between the controlled events and pull
 the pointer away mid-drag. From the frame a command is queued until one frame after its last event,
 the real mouse motion, buttons and wheel for the control's window (every window when it has none) are
-dropped while a pointer command (`/click`, `/drag`) runs, and the real keys and text while a `/key` or
-`/type` runs; the other device is left alone. Before and after, everything passes. Controlled events
+dropped while a pointer command (`/click`, `/drag`) runs, and the real keys and text while a `/key`,
+a `/type` or a pointer command with `mods` runs; the other device is left alone. Before and after, everything passes. Controlled events
 carry a tag in the event's reserved word (`Event.tag()`, zero on every event SDL makes), which is what
 tells them apart, and the filter is an SDL event filter installed only while it is needed, calling the
 program's own filter for whatever it lets through and putting it back afterwards. **No change to the
@@ -760,7 +769,7 @@ SDL's queue, and `pumped` from `sh.sysl.kairos.pump` composes it with any kairos
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.22", features = [kairos] }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.23", features = [kairos] }
   kairos { git = "github.com/sysl-lang/kairos", version = "0.1.7" }
 }
 ```
