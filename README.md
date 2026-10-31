@@ -10,7 +10,7 @@ on-screen keyboard, and the lifecycle events an app is stopped and restarted by.
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.18" }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.19" }
 }
 ```
 
@@ -276,6 +276,38 @@ that wants the callback at once on whichever thread SDL calls it.
 platform does not report it, so a program has to read the extension anyway; a way to cancel an open
 dialog, which SDL does not have; and a blocking "ask and wait" call, which would stop the frames the
 panel exists not to stop.
+
+## Message boxes
+
+The system's own alert box, for "Save changes?":
+
+```sysl
+val buttons = [message_button(1, "Save", on_return = true), message_button(2, "Don't Save"),
+               message_button(3, "Cancel", on_escape = true)]
+
+ask("Save changes?", "The model has unsaved edits.", buttons, Warning, Some(window)) match
+    Ok(Some(1)) -> save()
+    Ok(Some(2)) -> discard()
+    Ok(Some(_)) -> ()
+    Ok(None) -> ()
+    Err(message) -> report(message)
+
+show_message("Exported", "The file was written.", Information, Some(window))
+```
+
+`ask` answers the chosen button's `id` (any non-negative number, not a position), `None` when the box
+was closed without a choice, or `Err` with SDL's text. `on_return` and `on_escape` mark the buttons
+those keys choose. `MessageKind` is `Information`, `Warning` or `Error`. `show_message` is the one-button
+form. **Both block until answered**, on the main thread, so pass the window and expect your own frames
+to stop meanwhile; unlike the file dialogs there is no callback. `examples/message-box` is a whole
+program. A field declares no default, so a button is made with `message_button(...)`, or with
+`MessageButton(id, text, on_return, on_escape)` written out.
+
+**Bound:** `SDL_ShowMessageBox` and `SDL_ShowSimpleMessageBox`, with `SDL_MessageBoxData`,
+`SDL_MessageBoxButtonData`, `SDL_MessageBoxColor` and `SDL_MessageBoxColorScheme` in `sh.sysl.sdl3.c`,
+their sizes and offsets pinned to clang. **Deliberately absent:** a custom color scheme (the pleasant layer
+passes null, so the system's colors apply) and the button-order flags `LEFT_TO_RIGHT` and `RIGHT_TO_LEFT`.
+Strings are copied so each ends in a NUL whatever it was sliced from.
 
 ## The clock
 
@@ -687,7 +719,7 @@ SDL's queue, and `pumped` from `sh.sysl.kairos.pump` composes it with any kairos
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.18", features = [kairos] }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.19", features = [kairos] }
   kairos { git = "github.com/sysl-lang/kairos", version = "0.1.7" }
 }
 ```

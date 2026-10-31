@@ -114,6 +114,32 @@ struct DialogFileFilter
     name: *u8
     pattern: *u8
 
+// `SDL_MessageBoxButtonData` — flags, the id answered when it is chosen, and its UTF-8 label.
+struct MessageBoxButtonData
+    flags: u32
+    button_id: i32
+    text: *u8
+
+// `SDL_MessageBoxColor` — three bytes, with no padding.
+struct MessageBoxColor
+    r: u8
+    g: u8
+    b: u8
+
+// `SDL_MessageBoxColorScheme` — five colors, indexed by `SDL_MessageBoxColorType`.
+struct MessageBoxColorScheme
+    colors: [5]MessageBoxColor
+
+// `SDL_MessageBoxData` — the whole box. `color_scheme` may be null for the system's own colors.
+struct MessageBoxData
+    flags: u32
+    window: *Window
+    title: *u8
+    message: *u8
+    numbuttons: i32
+    buttons: *MessageBoxButtonData
+    color_scheme: *MessageBoxColorScheme
+
 // ## The event union
 //
 // **`SDL_Event` is a union of about thirty structs in 128 bytes.** It is declared here as the header
@@ -516,3 +542,9 @@ extern "SDL_ShowOpenFolderDialog" show_open_folder_dialog(callback: *extern(*u8,
 extern "SDL_ShowFileDialogWithProperties" show_file_dialog_with_properties(kind: i32,
                                                                           callback: *extern(*u8, **u8, i32) -> unit,
                                                                           userdata: *u8, props: u32)
+
+// ## Message boxes
+
+extern "SDL_ShowMessageBox" show_message_box(data: *MessageBoxData, button_id: *i32) -> bool
+extern "SDL_ShowSimpleMessageBox" show_simple_message_box(flags: u32, title: *u8, message: *u8,
+                                                          window: *Window) -> bool

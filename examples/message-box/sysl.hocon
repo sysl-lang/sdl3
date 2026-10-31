@@ -1,0 +1,20 @@
+// Ask "Save changes?" through the system's own alert box, and print which button was chosen.
+//
+//     sysl build . --lib ../..
+//
+// Named by coordinate like any program of the package; `--lib ../..` builds it against this checkout.
+package {
+  name    = "message-box"
+  version = "0.0.1"
+  sysl    = "0.8.6"
+}
+
+dependencies {
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.18" }
+}
+
+requires {
+  os    = true
+  posix = true
+  heap  = true
+}

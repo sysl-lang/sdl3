@@ -1,0 +1,20 @@
+// Opens a small window, asks "Save changes?" in the system's own alert box, prints the answer, then
+// shows a plain notice and exits. It runs until a person answers.
+
+import sh.sysl.sdl3.*
+
+init()
+
+val window = create_window("Message box", 480, 240).expect("a window")
+val buttons = [message_button(1, "Save", on_return = true), message_button(2, "Don't Save"),
+               message_button(3, "Cancel", on_escape = true)]
+
+ask("Save changes?", "The model has unsaved edits.", buttons, Warning, Some(window)) match
+    Ok(Some(1)) -> print("save")
+    Ok(Some(2)) -> print("don't save")
+    Ok(Some(_)) -> print("cancel")
+    Ok(None) -> print("closed without a choice")
+    Err(message) -> print(f"failed: $message")
+
+_ = show_message("Done", "That was the last question.", Information, Some(window))
+quit()

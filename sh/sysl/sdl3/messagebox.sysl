@@ -1,0 +1,121 @@
+module sh.sysl.sdl3
+
+import sh.sysl.sdl3.c
+import sysl.text.{CString, cstring}
+import sysl.slices.as_ptr
+import sysl.buf.{Buf, buf}
+
+// The system's own alert box — "Save changes? Save / Don't Save / Cancel" as a native panel, not
+// something the program draws.
+//
+// **Both calls block** until the user has answered, and on macOS they run a modal loop, so a program
+// drawing its own frames stops drawing them for the duration. Call them from the main thread, and
+// pass the window so the box is attached to it. Unlike the file dialogs there is no callback and no
+// delivery step: the answer is the return value.
+
+// The icon and wording a platform gives the box.
+enum MessageKind
+    Information
+    Warning
+    Error
+
+    code(self) -> u32
+        self match
+            Information -> MESSAGEBOX_INFORMATION
+            Warning -> MESSAGEBOX_WARNING
+            Error -> MESSAGEBOX_ERROR
+end MessageKind
+
+// One button. `id` is what `ask` answers when it is chosen, so it may be any number the program likes
+// and need not be its position. `on_return` marks the button the Return key chooses and `on_escape`
+// the one Escape chooses; each may be set on at most one button, and a button may carry both.
+struct MessageButton
+    id: i32
+    text: string
+    on_return: bool
+    on_escape: bool
+
+    // The flag word SDL reads for this button.
+    flags(self) -> u32
+        var f: u32 = 0
+
+        if self.on_return then f |= MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT
+        if self.on_escape then f |= MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT
+
+        f
+end MessageButton
+
+// A button answering to no key unless told to: `message_button(2, "Don't Save")`. The struct's own
+// constructor takes all four fields, since a field declares no default.
+message_button(id: i32, text: string, on_return: bool = false, on_escape: bool = false) -> MessageButton =
+    MessageButton(id, text, on_return, on_escape)
+
+// A box in the shape SDL reads, and the owner of everything it points at. Every string is copied so it
+// ends in a NUL whatever it was sliced from, and `data` holds raw pointers into `buttons` and
+// `strings`, so this value must stay alive until the call it was made for has returned.
+private[sdl3] struct MessageBoxSet
+    buttons: []c.MessageBoxButtonData
+    strings: Buf[CString]
+    data: c.MessageBoxData
+end MessageBoxSet
+
+private[sdl3] marshal_message_box(title: string, message: string, buttons: []const MessageButton,
+                                  kind: MessageKind, window: Option[&Window]) -> MessageBoxSet
+    var strings: Buf[CString] = buf()
+    val t = cstring(title)
+    val m = cstring(message)
+    val blank = c.MessageBoxButtonData(0, 0, null)
+    var array: []c.MessageBoxButtonData = [blank; buttons.len]
+
+    for i in 0..<buttons.len
+        val label = cstring(buttons[i].text)
+
+        array[i] = c.MessageBoxButtonData(buttons[i].flags(), buttons[i].id, label.ptr)
+        strings.push(label)
+
+    val handle: *c.Window = window match
+        Some(w) -> w.handle
+        None -> null
+
+    val list: *c.MessageBoxButtonData = if buttons.len == 0 then null else as_ptr(array)
+    val data = c.MessageBoxData(kind.code(), handle, t.ptr, m.ptr, i32(buttons.len), list, null)
+
+    strings.push(t)
+    strings.push(m)
+    MessageBoxSet(array, strings, data)
+end marshal_message_box
+
+// Show a box with one OK button and wait for it to be dismissed.
+show_message(title: string, message: string, kind: MessageKind = Information,
+             window: Option[&Window] = None) -> Result[unit, string]
+    val t = cstring(title)
+    val m = cstring(message)
+    val handle: *c.Window = window match
+        Some(w) -> w.handle
+        None -> null
+
+    if c.show_simple_message_box(kind.code(), t.ptr, m.ptr, handle) then Ok(()) else Err(error())
+end show_message
+
+// Show a box with the given buttons and wait for a choice. Answers the chosen button's `id`, or
+// `None` when the box was closed without choosing one — the window's close button, or Escape where no
+// button is marked for it. Fails with SDL's text when no button was given or the box could not be shown.
+//
+//     ask("Save changes?", "The model has unsaved edits.",
+//         [message_button(1, "Save", on_return = true), message_button(2, "Don't Save"),
+//          message_button(3, "Cancel", on_escape = true)], Warning, Some(window))
+ask(title: string, message: string, buttons: []const MessageButton, kind: MessageKind = Information,
+    window: Option[&Window] = None) -> Result[Option[i32], string]
+    if buttons.len == 0 then return Err("a message box needs at least one button")
+
+    for i in 0..<buttons.len
+        if buttons[i].id < 0 then return Err("a button id may not be negative: SDL answers -1 for no choice")
+
+    var box = marshal_message_box(title, message, buttons, kind, window)
+    var chosen: i32 = -1
+    val shown = c.show_message_box(&box.data, &chosen)
+
+    if !shown then return Err(error())
+
+    if chosen < 0 then Ok(None) else Ok(Some(chosen))
+end ask

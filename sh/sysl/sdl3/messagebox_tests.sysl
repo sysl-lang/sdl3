@@ -1,0 +1,160 @@
+module sh.sysl.sdl3
+@tests
+
+import sh.sysl.sdl3.c
+import sysl.text.from_cstring
+import sysl.process
+
+// Everything about a message box except showing one: a box cannot be clicked in a test, so these
+// build the structs SDL would be handed and read them back. The layout numbers are `sizeof` and
+// `offsetof` from clang over `SDL_messagebox.h` (SDL 3.4).
+
+private text_of(p: *u8) -> string = from_cstring(p).unwrap_or("<not UTF-8>")
+
+// The byte after the last one of a string, which has to be the NUL C reads up to.
+private terminator(p: *u8, len: usize) -> u8 = p[len]
+
+private save_buttons() -> []MessageButton =
+    [message_button(1, "Save", on_return = true), message_button(2, "Don't Save"),
+     message_button(3, "Cancel", on_escape = true)]
+
+// ## Layout
+
+@test("message box structs are the size clang computes")
+message_box_struct_sizes()
+    assert_eq(sizeof(c.MessageBoxButtonData), 16usize, "SDL_MessageBoxButtonData")
+    assert_eq(sizeof(c.MessageBoxColor), 3usize, "SDL_MessageBoxColor is three bytes, unpadded")
+    assert_eq(sizeof(c.MessageBoxColorScheme), 15usize, "SDL_MessageBoxColorScheme is five colors")
+    assert_eq(sizeof(c.MessageBoxData), 56usize, "SDL_MessageBoxData")
+
+@test("message box fields sit where clang puts them")
+message_box_field_offsets()
+    assert_eq(offsetof(c.MessageBoxButtonData, flags), 0, "MessageBoxButtonData.flags")
+    assert_eq(offsetof(c.MessageBoxButtonData, button_id), 4, "MessageBoxButtonData.buttonID")
+    assert_eq(offsetof(c.MessageBoxButtonData, text), 8, "MessageBoxButtonData.text")
+
+    assert_eq(offsetof(c.MessageBoxColor, r), 0, "MessageBoxColor.r")
+    assert_eq(offsetof(c.MessageBoxColor, g), 1, "MessageBoxColor.g")
+    assert_eq(offsetof(c.MessageBoxColor, b), 2, "MessageBoxColor.b")
+
+    assert_eq(offsetof(c.MessageBoxData, flags), 0, "MessageBoxData.flags")
+    assert_eq(offsetof(c.MessageBoxData, window), 8, "MessageBoxData.window")
+    assert_eq(offsetof(c.MessageBoxData, title), 16, "MessageBoxData.title")
+    assert_eq(offsetof(c.MessageBoxData, message), 24, "MessageBoxData.message")
+    assert_eq(offsetof(c.MessageBoxData, numbuttons), 32, "MessageBoxData.numbuttons")
+    assert_eq(offsetof(c.MessageBoxData, buttons), 40, "MessageBoxData.buttons")
+    assert_eq(offsetof(c.MessageBoxData, color_scheme), 48, "MessageBoxData.colorScheme")
+
+@test("the message box constants are the header's values")
+message_box_constants()
+    assert_eq(MESSAGEBOX_ERROR, 0x10u32, "error")
+    assert_eq(MESSAGEBOX_WARNING, 0x20u32, "warning")
+    assert_eq(MESSAGEBOX_INFORMATION, 0x40u32, "information")
+    assert_eq(MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1u32, "return key")
+    assert_eq(MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 2u32, "escape key")
+
+// ## Conversion
+
+@test("each kind names its own SDL flag")
+each_kind_has_its_flag()
+    assert_eq(Information.code(), MESSAGEBOX_INFORMATION, "information")
+    assert_eq(Warning.code(), MESSAGEBOX_WARNING, "warning")
+    assert_eq(Error.code(), MESSAGEBOX_ERROR, "error")
+
+@test("a button's flags are the keys it answers to")
+button_flags()
+    assert_eq(message_button(1, "a").flags(), 0u32, "neither")
+    assert_eq(message_button(1, "a", on_return = true).flags(), 1u32, "return")
+    assert_eq(message_button(1, "a", on_escape = true).flags(), 2u32, "escape")
+    assert_eq(message_button(1, "a", on_return = true, on_escape = true).flags(), 3u32, "both")
+    assert_eq(MessageButton(1, "a", true, false).flags(), 1u32, "the plain constructor")
+
+@test("a box carries its buttons, ids and default keys in order")
+box_carries_buttons()
+    val box = marshal_message_box("Save changes?", "Unsaved edits.", save_buttons(), Warning, None)
+
+    assert_eq(box.data.numbuttons, 3, "three buttons")
+    assert_eq(box.data.flags, MESSAGEBOX_WARNING, "kind")
+    assert(box.data.window == null, "no parent window")
+    assert(box.data.color_scheme == null, "the system's colors")
+    assert_eq(text_of(box.data.title), "Save changes?", "title")
+    assert_eq(text_of(box.data.message), "Unsaved edits.", "message")
+
+    val b = box.data.buttons
+
+    assert_eq(b[0].button_id, 1, "first id")
+    assert_eq(b[1].button_id, 2, "second id")
+    assert_eq(b[2].button_id, 3, "third id")
+    assert_eq(b[0].flags, MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, "Save answers Return")
+    assert_eq(b[1].flags, 0u32, "Don't Save answers no key")
+    assert_eq(b[2].flags, MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, "Cancel answers Escape")
+    assert_eq(text_of(b[0].text), "Save", "first label")
+    assert_eq(text_of(b[1].text), "Don't Save", "second label")
+    assert_eq(text_of(b[2].text), "Cancel", "third label")
+
+@test("ids need not be positions, and zero is an id")
+ids_are_free()
+    val box = marshal_message_box("t", "m", [message_button(0, "Zero"), message_button(900, "Far")], Error, None)
+
+    assert_eq(box.data.buttons[0].button_id, 0, "zero")
+    assert_eq(box.data.buttons[1].button_id, 900, "far")
+    assert_eq(box.data.flags, MESSAGEBOX_ERROR, "kind")
+
+@test("strings sliced from a longer one still end in a NUL")
+sliced_strings_are_terminated()
+    val long = "Save!!!"
+    val box = marshal_message_box(long[0..<4], "Body!!!"[0..<4], [message_button(1, "Okay!!!"[0..<4])], Information,
+        None)
+
+    assert_eq(text_of(box.data.title), "Save", "title stops at the slice")
+    assert_eq(terminator(box.data.title, 4), 0u8, "title NUL")
+    assert_eq(text_of(box.data.message), "Body", "message stops at the slice")
+    assert_eq(terminator(box.data.message, 4), 0u8, "message NUL")
+    assert_eq(text_of(box.data.buttons[0].text), "Okay", "label stops at the slice")
+    assert_eq(terminator(box.data.buttons[0].text, 4), 0u8, "label NUL")
+
+@test("empty strings are empty C strings, not null")
+empty_strings_are_not_null()
+    val box = marshal_message_box("", "", [message_button(1, "")], Information, None)
+
+    assert(box.data.title != null, "title")
+    assert(box.data.message != null, "message")
+    assert(box.data.buttons[0].text != null, "label")
+    assert_eq(terminator(box.data.title, 0), 0u8, "title NUL")
+
+@test("two boxes do not share storage")
+boxes_do_not_share()
+    val a = marshal_message_box("A", "a", [message_button(1, "One")], Information, None)
+    val b = marshal_message_box("B", "b", [message_button(2, "Two")], Warning, None)
+
+    assert_eq(text_of(a.data.title), "A", "first title survives")
+    assert_eq(text_of(a.data.buttons[0].text), "One", "first label survives")
+    assert_eq(a.data.buttons[0].button_id, 1, "first id survives")
+    assert_eq(text_of(b.data.title), "B", "second title")
+
+// ## Refusals, which never reach SDL
+
+@test("a box with no buttons is refused before SDL is asked")
+no_buttons_is_refused()
+    ask("t", "m", []) match
+        Ok(_) -> assert(false, "answered")
+        Err(e) -> assert_eq(e, "a message box needs at least one button", "the reason")
+
+@test("a negative id is refused, since SDL answers -1 for no choice")
+negative_id_is_refused()
+    ask("t", "m", [message_button(1, "Fine"), message_button(-1, "Bad")]) match
+        Ok(_) -> assert(false, "answered")
+        Err(e) -> assert(e.len > 0, "a reason")
+
+// ## The example
+
+@test("the message box example builds")
+the_message_box_example_builds()
+    val binary = f"/tmp/sysl-sdl3-message-box-${process.pid()}"
+    val out = process.capture("sysl", ["build", ".", "--lib", "../..", "-o", binary], "examples/message-box")
+
+    out match
+        Ok(o) ->
+            assert(o.status.ok(), f"sysl build of examples/message-box: ${o.err.unwrap_or(o.text)}")
+            _ = process.capture("/bin/rm", ["-f", binary])
+        Err(_) -> assert(false, "sysl could not be started")
