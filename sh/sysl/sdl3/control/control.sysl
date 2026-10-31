@@ -25,17 +25,17 @@ module sh.sysl.sdl3.control
  * pointer travel, press, hold and let go. `Control.pointer` says where that pointer is, for a program
  * that wants to draw it.
  *
- * **It ignores `SIGPIPE`, for the whole process.** `sysl.net`'s `send` to a client that has gone raises
- * it, and its default action ends the program. A `sysl.signal.Watch` on it is left in place.
+ * **A client that hangs up is a closed connection, nothing more.** `sysl.net`'s `send` to a client that
+ * has gone answers an error (`peer_closed`) and never raises `SIGPIPE`, so the process's signal
+ * dispositions are left as the program set them.
  */
 
 import sysl.buf.{Buf, buf}
 import sysl.fs.{Kind, link_metadata, make_dir, remove_dir, remove_file, rename, set_permissions}
-import sysl.net.{Shutdown, Socket, UnixListener, unix, unix_connect, unix_listen, would_block}
+import sysl.net.{Shutdown, Socket, UnixListener, peer_closed, unix, unix_connect, unix_listen, would_block}
 import sysl.path.join
 import sysl.posix.time.monotonic
 import sysl.raw.ptr_cast
-import sysl.signal.{PIPE, ignore}
 import sysl.text.{CString, Search, cstring,join as join_strings, parse_f32, parse_int, split}
 import sysl.time.whole_micros
 import sh.sysl.png
@@ -57,6 +57,7 @@ private val write_budget_ms: long = 2
 // How long a connection may make no progress, in milliseconds.
 private val idle_ms: long = 10000
 private val linger_ms: long = 1000
+private val send_buffer_bytes: int = 4194304
 
 // How long a `GET /shot` waits for a program that never calls `capture`.
 private val shot_ms: long = 5000
@@ -426,6 +427,8 @@ struct Control
                     if socket.non_blocking().is_err()
                         _ = socket.close()
                     else
+                        // A Unix socket's 8 KB default would take a large answer a frame per 8 KB.
+                        _ = socket.set_send_buffer(send_buffer_bytes)
                         self.conns.push(Conn(socket, buf(), buf(), 0, Phase.Reading, now + idle_ms))
                 Err(_) -> return
     end accept_new
@@ -939,7 +942,7 @@ private write_some(conn: &Conn, stop: long, now: long)
                 conn.sent += n
                 conn.deadline = now + idle_ms
             Err(e) ->
-                if !would_block(e)
+                if peer_closed(e) || !would_block(e)
                     shut(conn)
                     return
 
@@ -1139,7 +1142,6 @@ end clear_stale
  * than `max_unix_path`.
  */
 listen(path: string, window: Option[&Window] = None, opts: Options = options()) -> Result[&Control, ControlError]
-    _ = ignore(PIPE)
     clear_stale(path)?
 
     val dir = path + ".d"

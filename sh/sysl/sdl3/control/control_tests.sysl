@@ -10,6 +10,9 @@ import sysl.encoding.json
 import sysl.fs.{exists, make_temp_dir, metadata, remove_dir_all, remove_file, symlink, write_text}
 import sysl.net.{Socket, unix, unix_connect, unix_listen, would_block}
 import sysl.path.join
+import sysl.posix.time.monotonic
+import sysl.slices.as_ptr
+import sysl.time.whole_micros
 import sysl.process
 import sysl.text.{Search, from_utf8_lossy, join as join_lines, repeat}
 import sh.sysl.png
@@ -1284,6 +1287,106 @@ a_large_answer_arrives_whole_for_a_client_that_reads_it()
     val cl = ask(control, &clock, "GET", "/big")
 
     assert_eq(body_of(cl).len, 3000000usize)
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+private now_ms() -> long = whole_micros(monotonic()) / 1000
+
+extern "sigaction" sigaction(sig: int, act: *u8, old: *u8) -> int
+
+// Set SIGPIPE to its default action and answer what it was: the first word of `old` is the handler,
+// 0 for the default and 1 for ignored.
+private sigpipe_was_ignored() -> bool
+    var act: [64]u8
+    var old: [64]u8
+
+    for i in 0..<64
+        act[i] = 0
+        old[i] = 0
+
+    assert_eq(sigaction(13, as_ptr(act[0..<64]), as_ptr(old[0..<64])), 0)
+
+    var ignored = false
+
+    for i in 0..<8
+        if old[i] != 0 then ignored = true
+
+    ignored
+end sigpipe_was_ignored
+
+// Frames a poll loop takes to bring a 3 MB answer to a client whose receive buffer is `recv` bytes.
+private frames_for_big(control: &Control, at: string, recv: int) -> int
+    var cl = connect(at)
+
+    if recv > 0 then cl.socket.set_recv_buffer(recv).unwrap()
+
+    cl.socket.send_all("GET /big HTTP/1.1\r\nHost: app\r\nContent-Length: 0\r\n\r\n".bytes).unwrap()
+
+    var frames = 0
+
+    for _ in 0..<200000
+        frames += 1
+        control.poll_at(long(frames))
+        drain(cl)
+
+        if cl.over
+            _ = cl.socket.close()
+            assert_eq(cl.got.len() > 3000000, true)
+            return frames
+
+    panic("no answer came")
+end frames_for_big
+
+@test
+a_large_answer_is_not_carried_a_buffer_of_8_kb_at_a_time()
+    up()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at).unwrap()
+
+    control.route((req) ->
+        if req.path == "/big" then Some(text(200, repeat("z", 3000000))) else None)
+
+    val started = now_ms()
+    val small = frames_for_big(control, at, 0)
+    val ms = now_ms() - started
+
+    print(f"3 MB answer, default client buffer: $small frames, $ms ms")
+
+    val big = frames_for_big(control, at, 4194304)
+
+    print(f"3 MB answer, 4 MB client buffer: $big frames")
+
+    // At 8 KB a turn it is 366 frames; with the buffer raised it goes in a few.
+    assert(small < 100 && big < 100, f"the accepted connection's send buffer is raised: $small frames and $ms ms by default, $big with a 4 MB client buffer")
+    control.close()
+    remove_dir_all(dir).unwrap()
+
+@test
+a_client_that_hangs_up_in_a_large_answer_leaves_sigpipe_alone_and_the_control_usable()
+    up()
+    _ = sigpipe_was_ignored()
+
+    val (dir, at) = socket_in("a.sock")
+    val control = listen(at).unwrap()
+    var clock: long = 0
+
+    control.route((req) ->
+        if req.path == "/big" then Some(text(200, repeat("z", 8000000))) else None)
+
+    // More hang-ups than the control has places, with the clock near still so no deadline frees one.
+    for _ in 0..<20
+        val gone = request(at, "GET", "/big")
+
+        control.poll_at(1)
+        control.poll_at(2)
+        gone.socket.close().unwrap()
+        control.poll_at(3)
+        control.poll_at(4)
+        control.poll_at(5)
+
+    assert_eq(status_of(ask(control, &clock, "GET", "/state")), 200)
+    assert(!sigpipe_was_ignored(), "listen left SIGPIPE's disposition as it found it")
     control.close()
     remove_dir_all(dir).unwrap()
 

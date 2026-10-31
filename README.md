@@ -10,7 +10,7 @@ on-screen keyboard, and the lifecycle events an app is stopped and restarted by.
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.21" }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.22" }
 }
 ```
 
@@ -711,8 +711,10 @@ only then renamed into place, so at no moment is it open wider. A socket a dead 
 replaced; a live one, or anything at the path that is not a socket, is refused. `control.close()`, or
 the last reference going, removes the file. Nothing here blocks the frame: the listener and the
 connections are non-blocking, a poll reads at most 64 KB and spends at most 2 ms writing, and a client
-that stalls is hung up on after ten seconds. **`listen` ignores `SIGPIPE` for the whole process**,
-because a send to a client that has gone raises it, and the default action would end the program.
+that stalls is hung up on after ten seconds. A send to a client that has gone is an error
+(`sysl.net`'s `peer_closed`), so it costs the connection and nothing else; the process's `SIGPIPE`
+disposition is left alone. Accepted connections get a 4 MB send buffer, so a large `/shot` is not
+carried 8 KB a frame.
 
 Connections are one request each, and the answer closes them. Deliberately absent: keep-alive and
 chunked uploads, JSON request bodies (a parameter is what `curl -d` writes), and any access control
@@ -758,7 +760,7 @@ SDL's queue, and `pumped` from `sh.sysl.kairos.pump` composes it with any kairos
 
 ```
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.21", features = [kairos] }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.22", features = [kairos] }
   kairos { git = "github.com/sysl-lang/kairos", version = "0.1.7" }
 }
 ```
