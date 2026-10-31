@@ -1,0 +1,1001 @@
+module sh.sysl.sdl3.control
+@requires(posix)
+
+/** A running program controlled from outside, the way a browser is through its developer tools: over
+ * HTTP on a private Unix socket, with `curl --unix-socket <socket> http://app/...` as the whole client.
+ *
+ *     val control = listen("/tmp/app.sock", Some(window)).expect("the control socket")
+ *
+ *     loop
+ *         control.poll()
+ *
+ *         for e in events() do handle(e)
+ *
+ *         draw(renderer)
+ *         control.capture(renderer)
+ *         renderer.present()
+ *
+ * **Everything happens on the frame loop's thread.** `poll` never waits: the listener and every
+ * connection are non-blocking, and what one poll reads and writes is bounded. So a client that stalls,
+ * disconnects or sends nonsense costs a frame nothing it could notice, and a route added with `route`
+ * may read the program's state without a lock.
+ *
+ * **What it does to the input is what a person would see.** Commands go in by `SDL_PushEvent`, at most
+ * one event a frame, so the program receives them exactly as real ones and a person watching sees a
+ * pointer travel, press, hold and let go. `Control.pointer` says where that pointer is, for a program
+ * that wants to draw it.
+ *
+ * **It ignores `SIGPIPE`, for the whole process.** `sysl.net`'s `send` to a client that has gone raises
+ * it, and its default action ends the program. A `sysl.signal.Watch` on it is left in place.
+ */
+
+import sysl.buf.{Buf, buf}
+import sysl.fs.{Kind, link_metadata, make_dir, remove_dir, remove_file, rename, set_permissions}
+import sysl.net.{Shutdown, Socket, UnixListener, unix, unix_connect, unix_listen, would_block}
+import sysl.path.join
+import sysl.posix.time.monotonic
+import sysl.signal.{PIPE, ignore}
+import sysl.text.{CString, cstring, join as join_strings, parse_f32, parse_int, split}
+import sysl.time.whole_micros
+import sh.sysl.png
+import sh.sysl.sdl3.{EventKind, KMOD_ALT, KMOD_CTRL, KMOD_GUI, KMOD_LALT, KMOD_LCTRL, KMOD_LGUI, KMOD_LSHIFT, KMOD_SHIFT, MouseButton, PixelFormat, Renderer, SCANCODE_LALT, SCANCODE_LCTRL, SCANCODE_LGUI, SCANCODE_LSHIFT, Surface, WINDOW_HIDDEN, Window, error, flush_events, key_event, mod_state, mouse_button_event, mouse_motion_event, push_event, scancode_from_name, set_mod_state, text_input_event}
+import sh.sysl.sdl3.c
+
+// The file mode bits that say an entry is a socket.
+private val socket_kind: u32 = 0o140000
+
+// Connections held at once; more wait in the listener's backlog.
+private val max_connections: usize = 16
+
+// What one poll may read, and how long it may keep trying to write. A Unix socket's buffer is small
+// (8 KB on a Mac), so a large response moves only while its client is reading: a little patience per
+// frame is what carries a screenshot at a useful rate, and it is bounded.
+private val read_budget: usize = 65536
+private val write_budget_ms: long = 2
+
+// How long a connection may make no progress, in milliseconds.
+private val idle_ms: long = 10000
+private val linger_ms: long = 1000
+
+// How long a `GET /shot` waits for a program that never calls `capture`.
+private val shot_ms: long = 5000
+
+// How many strings typed text keeps alive, for a program that has not yet handled the event.
+private val typed_kept: usize = 256
+
+// The most text one `POST /type` takes, in bytes.
+private val max_typed: usize = 65536
+
+// What a controlled event reports as its device: not a real mouse's, and not the touch id.
+private val control_device: u32 = 1
+
+/** How quickly a person watching sees things happen, in milliseconds. Each may be zero, which still
+ * gives every event a frame of its own.
+ */
+struct Options
+    /** How long the pointer takes to reach where a click or a drag begins. */
+    approach_ms: long
+    /** How long a click or a key stays down. */
+    hold_ms: long
+    /** How long between typed characters. */
+    type_ms: long
+
+/** A pace a person can follow: 150 ms to arrive, 60 ms held down, 30 ms a character. */
+options() -> Options = Options(150, 60, 30)
+
+/** Where the controlled pointer is, for a program that draws it. Window coordinates, as a mouse event's
+ * are. `seen` is false until the first command that moves it, and until then the rest mean nothing.
+ */
+struct Pointer
+    x: f32
+    y: f32
+    down: bool
+    button: MouseButton
+    seen: bool
+
+/** Why `listen` refused. */
+enum ControlError
+    /** A live program is answering on this socket. */
+    InUse(path: string)
+    /** The path holds something that is not a socket, which is not ours to replace. */
+    NotASocket(path: string)
+    /** The filesystem or the network said no. */
+    Failed(message: string)
+
+impl Display for ControlError
+    display(self, out: *Writer, fmt: FormatSpec)
+        val s = self match
+            InUse(p) -> f"another program is listening on $p"
+            NotASocket(p) -> f"$p exists and is not a socket"
+            Failed(m) -> m
+
+        display_str(s, out, fmt)
+
+private enum Phase
+    Reading
+    Waiting
+    Writing
+    Draining
+    Closed
+
+private struct Conn
+    socket: Socket
+    input: Buf[u8]
+    output: Buf[u8]
+    sent: usize
+    phase: Phase
+    deadline: long
+
+// The listener and its file. Apart from `Control` so that both `close` and its destructor can reach
+// them, and so the second to arrive does nothing.
+private struct Hold
+    listener: UnixListener
+    at: string
+    closed: bool
+
+// One thing the input queue does. An event step takes a frame of its own.
+private enum Step
+    Glide(x: f32, y: f32, ms: long)
+    Press(button: MouseButton, down: bool, clicks: u8)
+    Key(scancode: i32, mod: u16, down: bool)
+    Typed(chars: string)
+    Pause(ms: long)
+    Frames(n: long)
+    Finish(conn: &Conn)
+
+private now_ms() -> long = whole_micros(monotonic()) / 1000
+
+/** The live control of a program. Made with `listen`. */
+struct Control
+    private hold: &Hold
+    private window: Option[&Window]
+    private opts: Options
+    private conns: Buf[&Conn]
+    private routes: Buf[&Fn(Request) -> Option[Response]]
+    private steps: Buf[Step]
+    private shots: Buf[&Conn]
+    private typed: Buf[CString]
+    private scratch: []u8
+    private frames: long
+    private started: long
+    private from_x: f32
+    private from_y: f32
+    private frames_left: long
+    private refused: bool
+    private ptr: Pointer
+
+    /** Add routes. `f` sees every request first, in the order routes were added, and answers it or
+     * passes it on with `None`; what no route takes goes to the built-in commands. It runs inside
+     * `poll`, on the frame loop's thread, so it may read the program's state and should be quick.
+     */
+    route(&self, f: &Fn(Request) -> Option[Response]) = self.routes.push(f)
+
+    /** Where the controlled pointer is, and whether it is pressed. */
+    pointer(&self) -> Pointer = self.ptr
+
+    /** Whether anything is under way: input still going in, or a shot waiting for a frame. A program
+     * that sleeps until an event should keep drawing while this holds, and should wake to `poll` at
+     * least a few times a second regardless, since a client's arrival raises no SDL event.
+     */
+    active(&self) -> bool = !self.steps.is_empty() || !self.shots.is_empty()
+
+    /** How many times `poll` has run. */
+    frame(&self) -> long = self.frames
+
+    /** The socket's path. */
+    path(&self) -> string = self.hold.at
+
+    /** Once a frame, before the program drains its events. Never waits. */
+    poll(&self) = self.poll_at(now_ms())
+
+    /** `poll`, told what time it is in milliseconds: the clock is the caller's, so a test can step it. */
+    poll_at(&self, now: long)
+        if self.hold.closed then return
+
+        self.frames += 1
+        self.accept_new(now)
+        self.read_requests(now)
+        self.advance(now)
+        self.write_responses(now)
+        self.sweep(now)
+    end poll_at
+
+    /** Whether a `GET /shot` is waiting. A program drawing with the GPU asks this and then reads its
+     * frame back only when it is true, and hands it to `deliver_rgba`.
+     */
+    wants_shot(&self) -> bool = !self.shots.is_empty()
+
+    /** Answer any waiting shot from what this renderer has drawn. Call it **after drawing and before
+     * `present`**, every frame; it does nothing unless a shot is waiting.
+     */
+    capture(&self, renderer: &Renderer)
+        if !self.wants_shot() then return
+
+        renderer.read_pixels() match
+            Some(s) -> self.deliver_surface(s)
+            None -> self.answer_shots(error_response(500, f"the frame could not be read: ${error()}"))
+    end capture
+
+    /** Answer any waiting shot with this surface. */
+    deliver_surface(&self, frame: &Surface)
+        if !self.wants_shot() then return
+
+        self.answer_encoded(surface_png(frame))
+    end deliver_surface
+
+    /** Answer any waiting shot with a frame of tightly packed RGBA bytes, row zero at the top. Alpha is
+     * dropped: a shot is what is on the screen.
+     */
+    deliver_rgba(&self, width: int, height: int, rgba: []const u8)
+        if !self.wants_shot() then return
+
+        self.answer_encoded(rgba_png(width, height, rgba))
+    end deliver_rgba
+
+    /** Stop listening, hang up on every client and remove the socket file. Going out of scope does it
+     * too; doing it twice does nothing.
+     */
+    close(&self)
+        teardown(self.hold, self.conns, self.typed)
+        self.shots.clear()
+        self.steps.clear()
+    end close
+
+    private accept_new(&self, now: long)
+        while self.conns.len() < max_connections
+            self.hold.listener.accept() match
+                Ok(s) ->
+                    var socket = s
+
+                    // Accepted connections block whatever the listener does.
+                    if socket.non_blocking().is_err()
+                        drop_result(socket.close())
+                    else
+                        self.conns.push(Conn(socket, buf(), buf(), 0, Phase.Reading, now + idle_ms))
+                Err(_) -> return
+    end accept_new
+
+    private read_requests(&self, now: long)
+        var budget = read_budget
+
+        for i in 0..<self.conns.len()
+            val conn = self.conns.at(i)
+
+            if conn.phase == Phase.Reading
+                budget -= self.read_one(conn, now, budget)
+            else if conn.phase == Phase.Draining
+                budget -= discard(conn, budget)
+    end read_requests
+
+    // Read what is there, up to `budget`, and dispatch once there is a whole request. Answers the bytes read.
+    private read_one(&self, conn: &Conn, now: long, budget: usize) -> usize
+        var total: usize = 0
+
+        while total < budget
+            val room = if budget - total < self.scratch.len then budget - total else self.scratch.len
+
+            conn.socket.recv(self.scratch[0..<room]) match
+                Ok(n) ->
+                    if n == 0
+                        shut(conn)
+                        return total
+
+                    total += n
+                    conn.input.extend(self.scratch[0..<n])
+                    conn.deadline = now + idle_ms
+
+                    parse_request(conn.input.view()) match
+                        Incomplete -> ()
+                        Complete(req, _) ->
+                            self.dispatch(conn, req, now)
+                            return total
+                        Bad(status, reason) ->
+                            self.respond(conn, error_response(status, reason), now)
+                            return total
+                Err(e) ->
+                    if !would_block(e) then shut(conn)
+
+                    return total
+
+        total
+    end read_one
+
+    private respond(&self, conn: &Conn, r: Response, now: long)
+        if conn.phase == Phase.Closed then return
+
+        conn.output = write_response(r)
+        conn.sent = 0
+        conn.phase = Phase.Writing
+        conn.deadline = now + idle_ms
+    end respond
+
+    private dispatch(&self, conn: &Conn, req: Request, now: long)
+        for i in 0..<self.routes.len()
+            val f = self.routes.at(i)
+
+            f(req) match
+                Some(r) ->
+                    self.respond(conn, r, now)
+                    return
+                None -> ()
+
+        val allow = builtin_method(req.path)
+
+        if allow == ""
+            self.respond(conn, error_response(404, f"no such route: ${req.path}"), now)
+            return
+
+        if req.method != allow
+            var r = error_response(405, f"${req.path} takes ${allow}")
+
+            r.allow = allow
+            self.respond(conn, r, now)
+            return
+
+        val answered = req.path match
+            "/" -> Ok(Some(text(200, help_text)))
+            "/state" -> Ok(Some(json(200, self.state_json())))
+            "/shot" -> self.queue_shot(conn, now)
+            "/click" -> self.queue_click(conn, req)
+            "/drag" -> self.queue_drag(conn, req)
+            "/key" -> self.queue_key(conn, req)
+            "/type" -> self.queue_type(conn, req)
+            _ -> self.queue_wait(conn, req)
+
+        answered match
+            Ok(Some(r)) -> self.respond(conn, r, now)
+            Ok(None) -> ()
+            Err(reason) -> self.respond(conn, error_response(400, reason), now)
+    end dispatch
+
+    // The steps of a command go on the queue together, with the answer last. The connection waits.
+    private queue_shot(&self, conn: &Conn, now: long) -> Result[Option[Response], string]
+        conn.phase = Phase.Waiting
+        conn.deadline = now + shot_ms
+        self.shots.push(conn)
+
+        Ok(None)
+    end queue_shot
+
+    private finish(&self, conn: &Conn) -> Result[Option[Response], string]
+        conn.phase = Phase.Waiting
+        conn.deadline = 0
+        self.steps.push(Finish(conn))
+
+        Ok(None)
+    end finish
+
+    private queue_click(&self, conn: &Conn, req: Request) -> Result[Option[Response], string]
+        val x = coordinate(req, "x")?
+        val y = coordinate(req, "y")?
+        val button = button_param(req)?
+        val clicks = bounded(req, "clicks", 1, 3, 1)?
+
+        self.steps.push(Glide(x, y, self.opts.approach_ms))
+
+        for n in 1..clicks
+            self.steps.push(Press(button, true, u8(n)))
+            self.steps.push(Pause(self.opts.hold_ms))
+            self.steps.push(Press(button, false, u8(n)))
+
+        self.finish(conn)
+    end queue_click
+
+    private queue_drag(&self, conn: &Conn, req: Request) -> Result[Option[Response], string]
+        val (x0, y0) = point(req, "from")?
+        val (x1, y1) = point(req, "to")?
+        val button = button_param(req)?
+        val duration = bounded(req, "duration", 0, 60000, 400)?
+
+        self.steps.push(Glide(x0, y0, self.opts.approach_ms))
+        self.steps.push(Press(button, true, 1))
+        self.steps.push(Glide(x1, y1, duration))
+        self.steps.push(Press(button, false, 1))
+
+        self.finish(conn)
+    end queue_drag
+
+    private queue_key(&self, conn: &Conn, req: Request) -> Result[Option[Response], string]
+        val name = req.param("key") match
+            Some(k) -> k
+            None -> return Err("key is required")
+
+        val scancode = key_scancode(name) match
+            Some(s) -> s
+            None -> return Err(f"no key is named $name")
+
+        val mods = modifiers(req.param("mods").unwrap_or(""))?
+
+        self.press_key(scancode, mods)
+        self.finish(conn)
+    end queue_key
+
+    // Modifiers go down first and come up last, each with an event of its own, as they do on a keyboard.
+    private press_key(&self, scancode: i32, mods: Buf[Modifier])
+        val base = mod_state()
+        var held = base
+
+        for i in 0..<mods.len()
+            val m = mods.at(i)
+
+            held |= m.bit
+            self.steps.push(Key(m.scancode, held, true))
+
+        self.steps.push(Key(scancode, held, true))
+        self.steps.push(Pause(self.opts.hold_ms))
+        self.steps.push(Key(scancode, held, false))
+
+        for i in 0..<mods.len()
+            val m = mods.at(mods.len() - 1 - i)
+
+            held &= ~m.bit
+            self.steps.push(Key(m.scancode, held, false))
+    end press_key
+
+    private queue_type(&self, conn: &Conn, req: Request) -> Result[Option[Response], string]
+        val typed = req.param("text") match
+            Some(t) -> t
+            None -> return Err("text is required, and must be UTF-8")
+
+        if typed.len > max_typed then return Err(f"text is limited to $max_typed bytes")
+
+        val pace = bounded(req, "pace", 0, 1000, self.opts.type_ms)?
+        var none: Buf[Modifier] = buf()
+        var at: usize = 0
+
+        while at < typed.len
+            val size = utf8_size(typed.bytes[at])
+            val piece = typed[at..<at + size]
+
+            at += size
+
+            if piece == "\0" then return Err("text may not hold a NUL")
+
+            // A person's Return or Tab is a key and no text at all.
+            if piece == "\n"
+                self.press_key(scancode_from_name("Return").unwrap(), none)
+            else if piece == "\t"
+                self.press_key(scancode_from_name("Tab").unwrap(), none)
+            else
+                self.steps.push(Typed(piece))
+
+            self.steps.push(Pause(pace))
+
+        self.finish(conn)
+    end queue_type
+
+    private queue_wait(&self, conn: &Conn, req: Request) -> Result[Option[Response], string]
+        if req.param("frames").is_none() && req.param("ms").is_none() then return Err("frames or ms is required")
+
+        self.steps.push(Frames(bounded(req, "frames", 0, 100000, 0)?))
+        self.steps.push(Pause(bounded(req, "ms", 0, 600000, 0)?))
+
+        self.finish(conn)
+    end queue_wait
+
+    // Run the queue: at most one event a frame, so each one is a frame a program can draw and a person
+    // can see. The answer goes in the same poll as the last event, and a client's next request is
+    // necessarily a later poll, so a shot it asks for shows what the command did.
+    private advance(&self, now: long)
+        var pushed = false
+
+        while !self.steps.is_empty()
+            val done = self.steps.at(0) match
+                Glide(x, y, ms) ->
+                    if pushed then return
+
+                    val finished = self.run_glide(x, y, ms, now, &pushed)
+
+                    if !finished then return
+
+                    true
+                Press(button, down, clicks) ->
+                    if pushed then return
+
+                    self.push_press(button, down, clicks)
+                    pushed = true
+                    true
+                Key(scancode, mod, down) ->
+                    if pushed then return
+
+                    self.push_key(scancode, mod, down)
+                    pushed = true
+                    true
+                Typed(chars) ->
+                    if pushed then return
+
+                    self.push_typed(chars)
+                    pushed = true
+                    true
+                Pause(ms) ->
+                    if self.started < 0 then self.started = now
+
+                    now - self.started >= ms
+                Frames(n) ->
+                    if self.started < 0
+                        self.started = now
+                        self.frames_left = n
+
+                    if self.frames_left > 0
+                        self.frames_left -= 1
+                        false
+                    else
+                        true
+                Finish(conn) ->
+                    self.finish_command(conn, now)
+                    true
+
+            if !done then return
+
+            self.started = -1
+            discard_step(self.steps.remove(0))
+    end advance
+
+    // One step of the pointer's travel. Answers whether it has arrived.
+    private run_glide(&self, x: f32, y: f32, ms: long, now: long, pushed: *bool) -> bool
+        if !self.ptr.seen
+            self.ptr.seen = true
+            self.ptr.x = x
+            self.ptr.y = y
+            self.push_motion(x, y)
+            *pushed = true
+            return true
+
+        if self.started < 0
+            self.started = now
+            self.from_x = self.ptr.x
+            self.from_y = self.ptr.y
+
+        val elapsed = now - self.started
+
+        // The first frame of a timed glide has moved nothing.
+        if ms > 0 && elapsed == 0 then return false
+
+        if ms <= 0 || elapsed >= ms
+            self.push_motion(x, y)
+            *pushed = true
+            return true
+
+        val t = f32(elapsed) / f32(ms)
+
+        self.push_motion(self.from_x + (x - self.from_x) * t, self.from_y + (y - self.from_y) * t)
+        *pushed = true
+        false
+    end run_glide
+
+    private window_id(&self) -> u32
+        self.window match
+            Some(w) -> w.id()
+            None -> 0
+    end window_id
+
+    private push_checked(&self, e: sh.sysl.sdl3.Event)
+        if !push_event(e) then self.refused = true
+    end push_checked
+
+    private push_motion(&self, x: f32, y: f32)
+        val held = if self.ptr.down then u32(1) << u32(self.ptr.button.code() - 1) else 0
+
+        self.push_checked(mouse_motion_event(self.window_id(), control_device, held, x, y, x - self.ptr.x, y - self.ptr.y))
+        self.ptr.x = x
+        self.ptr.y = y
+    end push_motion
+
+    private push_press(&self, button: MouseButton, down: bool, clicks: u8)
+        self.ptr.down = down
+        self.ptr.button = button
+        self.push_checked(mouse_button_event(self.window_id(), control_device, button, down, clicks, self.ptr.x, self.ptr.y))
+    end push_press
+
+    // SDL's own idea of the modifiers moves with the events, for a program that asks it rather than the
+    // event. What it answers afterwards is what it answered before the command.
+    private push_key(&self, scancode: i32, mod: u16, down: bool)
+        set_mod_state(mod)
+        self.push_checked(key_event(self.window_id(), control_device, scancode, c.get_key_from_scancode(scancode, mod, true), mod, down))
+    end push_key
+
+    private push_typed(&self, chars: string)
+        val owned = cstring(chars)
+
+        self.typed.push(owned)
+
+        if self.typed.len() > typed_kept then discard_cstring(self.typed.remove(0))
+
+        self.push_checked(text_input_event(self.window_id(), owned.ptr))
+    end push_typed
+
+    private finish_command(&self, conn: &Conn, now: long)
+        if self.refused
+            self.refused = false
+            self.respond(conn, error_response(500, f"SDL refused an event: ${error()}"), now)
+        else
+            self.respond(conn, json(200, f"{\"ok\":true,\"frame\":${self.frames}}\n"), now)
+    end finish_command
+
+    private write_responses(&self, now: long)
+        val stop = now_ms() + write_budget_ms
+
+        for i in 0..<self.conns.len()
+            val conn = self.conns.at(i)
+
+            if conn.phase == Phase.Writing then write_some(conn, stop, now)
+    end write_responses
+
+    private sweep(&self, now: long)
+        var i = self.conns.len()
+
+        while i > 0
+            i -= 1
+
+            val conn = self.conns.at(i)
+
+            if conn.deadline != 0 && now >= conn.deadline && conn.phase != Phase.Closed
+                conn.phase match
+                    Reading -> self.respond(conn, error_response(408, "the request did not arrive in time"), now)
+                    Waiting -> self.respond(conn, error_response(503, "the program delivered no frame"), now)
+                    _ -> shut(conn)
+
+            if conn.phase == Phase.Closed then discard_conn(self.conns.remove(i))
+
+        i = self.shots.len()
+
+        while i > 0
+            i -= 1
+
+            if self.shots.at(i).phase != Phase.Waiting then discard_conn(self.shots.remove(i))
+    end sweep
+
+    private answer_encoded(&self, encoded: Result[Buf[u8], string])
+        encoded match
+            Ok(png_bytes) -> self.answer_shots(bytes(200, "image/png", png_bytes.view()))
+            Err(reason) -> self.answer_shots(error_response(500, reason))
+    end answer_encoded
+
+    private answer_shots(&self, r: Response)
+        val now = now_ms()
+
+        for i in 0..<self.shots.len()
+            self.respond(self.shots.at(i), r, now)
+
+        self.shots.clear()
+    end answer_shots
+
+    private state_json(&self) -> string
+        val p = self.ptr
+        val window = self.window match
+            Some(w) ->
+                val (width, height) = w.size()
+                val (pw, ph) = w.size_in_pixels()
+                val hidden = (w.flags() & WINDOW_HIDDEN) != 0
+
+                f"{\"width\":$width,\"height\":$height,\"pixel_width\":$pw,\"pixel_height\":$ph,\"hidden\":$hidden}"
+            None -> "null"
+
+        f"{\"frame\":${self.frames},\"active\":${self.active()},\"pointer\":{\"x\":${p.x},\"y\":${p.y},\"down\":${p.down},\"button\":${p.button.code()},\"seen\":${p.seen}},\"window\":$window}\n"
+    end state_json
+end Control
+
+impl Drop for Control
+    drop(self) = teardown(self.hold, self.conns, self.typed)
+
+private teardown(hold: &Hold, conns: Buf[&Conn], typed: Buf[CString])
+    if hold.closed then return
+
+    hold.closed = true
+
+    for i in 0..<conns.len() do shut(conns.at(i))
+
+    conns.clear()
+
+    // SDL copies an event and not what it points at, so typed text still queued would outlive the
+    // strings about to go.
+    if !typed.is_empty() then flush_events(EventKind.TextInput, EventKind.TextInput)
+
+    typed.clear()
+    drop_result(hold.listener.close())
+    drop_result(remove_file(hold.at))
+end teardown
+
+private drop_result[T, E](r: Result[T, E]) = ()
+
+private discard_step(s: Step) = ()
+
+private discard_conn(c: &Conn) = ()
+
+private discard_cstring(s: CString) = ()
+
+private shut(conn: &Conn)
+    if conn.phase == Phase.Closed then return
+
+    conn.phase = Phase.Closed
+    conn.input.clear()
+    conn.output.clear()
+    drop_result(conn.socket.close())
+end shut
+
+// Read and throw away what a client is still sending after its answer, so that hanging up cannot turn
+// the answer it has not read yet into a connection reset. Answers the bytes read.
+private discard(conn: &Conn, budget: usize) -> usize
+    var into: [4096]u8
+    var total: usize = 0
+
+    while total < budget
+        conn.socket.recv(into[0..<4096]) match
+            Ok(n) ->
+                if n == 0
+                    shut(conn)
+                    return total
+
+                total += n
+            Err(e) ->
+                if !would_block(e) then shut(conn)
+
+                return total
+
+    total
+end discard
+
+// Send what the socket takes, coming back for more until `stop` while its client is reading.
+private write_some(conn: &Conn, stop: long, now: long)
+    loop
+        val left = conn.output.len() - conn.sent
+
+        if left == 0
+            drop_result(conn.socket.shutdown(Shutdown.Write))
+            conn.output.clear()
+            conn.phase = Phase.Draining
+            conn.deadline = now + linger_ms
+            return
+
+        conn.socket.send(conn.output.view()[conn.sent..<conn.output.len()]) match
+            Ok(n) ->
+                conn.sent += n
+                conn.deadline = now + idle_ms
+            Err(e) ->
+                if !would_block(e)
+                    shut(conn)
+                    return
+
+                if now_ms() >= stop then return
+end write_some
+
+// The method a built-in route takes, or "" for no such route.
+private builtin_method(path: string) -> string
+    path match
+        "/" | "/state" | "/shot" -> "GET"
+        "/click" | "/drag" | "/key" | "/type" | "/wait" -> "POST"
+        _ -> ""
+end builtin_method
+
+private val help_text = """
+    GET  /state                                  the frame, the pointer, the window, as JSON
+    GET  /shot                                   the frame, as a PNG
+    POST /click  x y [button] [clicks]           move there, press, let go
+    POST /drag   from=x,y to=x,y [duration] [button]
+    POST /key    key [mods=ctrl,shift,alt,gui]   press a key by SDL's name for it
+    POST /type   text [pace]                     type it a character at a time
+    POST /wait   frames | ms                     answer when the input before it has gone in and this has passed
+    Parameters are form-encoded or in the query: curl --unix-socket S http://app/click -d x=10 -d y=20
+    """
+
+private finite(x: f32) -> bool = x == x && x > -1e9 && x < 1e9
+
+private number(name: string, s: string) -> Result[f32, string]
+    parse_f32(s) match
+        Ok(x) -> if finite(x) then Ok(x) else Err(f"$name is not a finite number: $s")
+        Err(_) -> Err(f"$name is not a number: $s")
+end number
+
+private coordinate(req: Request, name: string) -> Result[f32, string]
+    req.param(name) match
+        Some(s) -> number(name, s)
+        None -> Err(f"$name is required")
+end coordinate
+
+private point(req: Request, name: string) -> Result[(f32, f32), string]
+    val s = req.param(name) match
+        Some(s) -> s
+        None -> return Err(f"$name is required, as x,y")
+
+    val parts = split(s, ",")
+
+    if parts.len != 2 then return Err(f"$name is not x,y: $s")
+
+    Ok((number(name, parts[0])?, number(name, parts[1])?))
+end point
+
+private button_param(req: Request) -> Result[MouseButton, string]
+    req.param("button").unwrap_or("left") match
+        "left" -> Ok(MouseButton.Left)
+        "middle" -> Ok(MouseButton.Middle)
+        "right" -> Ok(MouseButton.Right)
+        "x1" -> Ok(MouseButton.X1)
+        "x2" -> Ok(MouseButton.X2)
+        other -> Err(f"no button is named $other")
+end button_param
+
+private bounded(req: Request, name: string, low: long, high: long, default: long) -> Result[long, string]
+    val s = req.param(name) match
+        Some(s) -> s
+        None -> return Ok(default)
+
+    val n = parse_int(s) match
+        Ok(n) -> long(n)
+        Err(_) -> return Err(f"$name is not a whole number: $s")
+
+    if n < low || n > high then return Err(f"$name must be between $low and $high: $s")
+
+    Ok(n)
+end bounded
+
+// SDL's name for a key, and the two spellings of one nobody remembers.
+private key_scancode(name: string) -> Option[i32]
+    name match
+        "enter" -> scancode_from_name("Return")
+        "esc" -> scancode_from_name("Escape")
+        "del" -> scancode_from_name("Delete")
+        _ -> scancode_from_name(name)
+end key_scancode
+
+private struct Modifier
+    scancode: i32
+    bit: u16
+
+// `mods=ctrl,shift`. A form-encoded `ctrl+shift` arrives as `ctrl shift`, which reads the same.
+private modifiers(s: string) -> Result[Buf[Modifier], string]
+    var out: Buf[Modifier] = buf()
+    val names = split(join_strings(split(s, " "), ","), ",")
+
+    for i in 0..<names.len
+        names[i] match
+            "" -> ()
+            "ctrl" -> out.push(Modifier(SCANCODE_LCTRL, KMOD_LCTRL))
+            "shift" -> out.push(Modifier(SCANCODE_LSHIFT, KMOD_LSHIFT))
+            "alt" -> out.push(Modifier(SCANCODE_LALT, KMOD_LALT))
+            "gui" | "cmd" | "super" | "meta" -> out.push(Modifier(SCANCODE_LGUI, KMOD_LGUI))
+            other -> return Err(f"no modifier is named $other")
+
+    Ok(out)
+end modifiers
+
+private utf8_size(lead: u8) -> usize
+    if lead < 0x80 then return 1
+    if lead < 0xE0 then return 2
+    if lead < 0xF0 then return 3
+
+    4
+end utf8_size
+
+/** `frame` as a PNG, whatever its pixel format. Colour only: a shot is what is on the screen, and the
+ * alpha left in a window's backbuffer means nothing.
+ */
+surface_png(frame: &Surface) -> Result[Buf[u8], string]
+    val rgb = frame.convert(PixelFormat.Rgb24) match
+        Some(s) -> s
+        None -> return Err(f"the frame could not be converted: ${error()}")
+
+    val w = usize(rgb.width())
+    val h = usize(rgb.height())
+    val pitch = usize(rgb.pitch())
+    val pixels = rgb.pixels()[0..<pitch * h]
+    var out: Buf[u8] = buf()
+
+    out.reserve(w * h * 3)
+
+    for y in 0..<h do out.extend(pixels[y * pitch..<y * pitch + w * 3])
+
+    encode_rgb(w, h, out.view())
+end surface_png
+
+/** Tightly packed RGBA bytes as a PNG, with the alpha dropped. */
+rgba_png(width: int, height: int, rgba: []const u8) -> Result[Buf[u8], string]
+    if width <= 0 || height <= 0 then return Err(f"a frame cannot be ${width}x$height")
+
+    val w = usize(width)
+    val h = usize(height)
+
+    if rgba.len != w * h * 4 then return Err(f"a ${width}x$height RGBA frame is ${w * h * 4} bytes, and this is ${rgba.len}")
+
+    var out: Buf[u8] = buf()
+
+    out.reserve(w * h * 3)
+
+    for i in 0..<w * h
+        out.push(rgba[i * 4])
+        out.push(rgba[i * 4 + 1])
+        out.push(rgba[i * 4 + 2])
+
+    encode_rgb(w, h, out.view())
+end rgba_png
+
+// Level 1: a shot is made inside a frame, and speed is worth more here than bytes.
+private encode_rgb(w: usize, h: usize, rgb: []u8) -> Result[Buf[u8], string]
+    val image = png.image(w, h, 2, 8, rgb) match
+        Ok(i) -> i
+        Err(e) -> return Err(f"the frame is not an image: $e")
+
+    png.encode(image, png.Options(1, png.Filter.Adaptive, false, 65536)) match
+        Ok(b) -> Ok(b)
+        Err(e) -> Err(f"the frame could not be encoded: $e")
+end encode_rgb
+
+// A stale file of ours may go. Anything else at the path, or a program still answering there, may not.
+private clear_stale(at: string) -> Result[unit, ControlError]
+    val entry = link_metadata(at) match
+        Ok(m) -> m
+        Err(_) -> return Ok(())
+
+    entry.kind() match
+        Kind.Special(bits) -> if bits != socket_kind then return Err(NotASocket(at))
+        _ -> return Err(NotASocket(at))
+
+    val address = unix(at) match
+        Ok(a) -> a
+        Err(e) -> return Err(Failed(f"$at: $e"))
+
+    unix_connect(address) match
+        Ok(s) ->
+            var live = s
+
+            drop_result(live.close())
+            Err(InUse(at))
+        Err(_) -> Ok(())
+end clear_stale
+
+/** Answer on a Unix socket at `path`, owner-only, replacing a socket a dead program left there. `window`
+ * is who the events are addressed to and what `GET /state` reports. A window may be hidden: events go
+ * in, and a frame is read back, just the same.
+ *
+ * **Nobody else can reach the socket at any point.** It is bound inside a private directory beside
+ * `path`, given its mode there, and only then renamed to `path`, so there is no moment at which it has
+ * the wider mode a `bind` gives it. That directory's name makes the longest path a few bytes shorter
+ * than `max_unix_path`.
+ */
+listen(path: string, window: Option[&Window] = None, opts: Options = options()) -> Result[&Control, ControlError]
+    drop_result(ignore(PIPE))
+    clear_stale(path)?
+
+    val dir = path + ".d"
+    val inner = join(dir, "s")
+
+    drop_result(remove_file(inner))
+    drop_result(remove_dir(dir))
+
+    val address = unix(inner) match
+        Ok(a) -> a
+        Err(e) -> return Err(Failed(f"$path: too long for a socket's address once bound: $e"))
+
+    make_dir(dir) match
+        Ok(_) -> ()
+        Err(e) -> return Err(Failed(f"$dir: $e"))
+
+    val made = bind_private(dir, inner, address, path)
+
+    drop_result(remove_file(inner))
+    drop_result(remove_dir(dir))
+
+    val listener = made?
+
+    val blank = Pointer(0.0, 0.0, false, MouseButton.Left, false)
+    val hold: &Hold = Hold(listener, path, false)
+
+    Ok(Control(hold, window, opts, buf(), buf(), buf(), buf(), buf(), [0; 16384], 0, -1, 0.0, 0.0, 0, false, blank))
+end listen
+
+private bind_private(dir: string, inner: string, address: sysl.net.UnixAddress, path: string) -> Result[UnixListener, ControlError]
+    set_permissions(dir, 0o700) match
+        Ok(_) -> ()
+        Err(e) -> return Err(Failed(f"$dir: $e"))
+
+    var listener = unix_listen(address) match
+        Ok(l) -> l
+        Err(e) -> return Err(Failed(f"$inner: $e"))
+
+    val installed = set_permissions(inner, 0o600).and_then((_) -> rename(inner, path)).and_then((_) -> listener.non_blocking())
+
+    installed match
+        Ok(_) -> Ok(listener)
+        Err(e) ->
+            drop_result(listener.close())
+            Err(Failed(f"$path: $e"))
+end bind_private

@@ -339,6 +339,12 @@ struct Event
     mouse_x(self) -> f32 = self.motion().x
     mouse_y(self) -> f32 = self.motion().y
 
+    // How far a `MouseMotion` moved, and the mask of buttons held while it did, `1 << (button - 1)`
+    // for each.
+    mouse_dx(self) -> f32 = self.motion().xrel
+    mouse_dy(self) -> f32 = self.motion().yrel
+    mouse_held(self) -> u32 = self.motion().state
+
     // Which button.
     mouse_button(self) -> MouseButton = MouseButton.of(self.button().button)
 
@@ -503,6 +509,45 @@ push_event(e: Event) -> bool
 
     c.push_event(&v)
 end push_event
+
+// A pointer movement, as a program that drives itself pushes one. `state` is the mask of buttons held,
+// `1 << (button - 1)` for each; `xrel` and `yrel` are how far it moved. Like every event built here,
+// it reaches whoever polls exactly as a real one does and changes nothing SDL itself remembers:
+// `mouse_state` still answers where the real mouse is.
+mouse_motion_event(window_id: u32, which: u32, state: u32, x: f32, y: f32, xrel: f32, yrel: f32) -> Event
+    var m = c.MouseMotionEvent(EVENT_MOUSE_MOTION, 0, 0, window_id, which, state, x, y, xrel, yrel, [0; 84])
+    val p: *c.Event = ptr_cast(&m)
+
+    Event(*p)
+end mouse_motion_event
+
+// A button going down or up. `clicks` is 1 for a single press and 2 for the second of a double.
+mouse_button_event(window_id: u32, which: u32, button: MouseButton, down: bool, clicks: u8, x: f32, y: f32) -> Event
+    val kind = if down then EVENT_MOUSE_BUTTON_DOWN else EVENT_MOUSE_BUTTON_UP
+    var m = c.MouseButtonEvent(kind, 0, 0, window_id, which, button.code(), down, clicks, 0, x, y, [0; 88])
+    val p: *c.Event = ptr_cast(&m)
+
+    Event(*p)
+end mouse_button_event
+
+// A key going down or up: its scancode, the keycode that scancode means under `mod`, and the modifiers
+// held. `scancode_from_name` and `key_from_scancode` answer the first two.
+key_event(window_id: u32, which: u32, scancode: i32, key: u32, mod: u16, down: bool) -> Event
+    val kind = if down then EVENT_KEY_DOWN else EVENT_KEY_UP
+    var k = c.KeyboardEvent(kind, 0, 0, window_id, which, scancode, key, mod, 0, down, false, [0; 90])
+    val p: *c.Event = ptr_cast(&k)
+
+    Event(*p)
+end key_event
+
+// Typed text. **`text` is read when the event is handled, not when it is pushed**, since SDL copies the
+// event and not what it points at: the caller keeps those NUL-terminated bytes alive until then.
+text_input_event(window_id: u32, text: *u8) -> Event
+    var t = c.TextEvent(EVENT_TEXT_INPUT, 0, 0, window_id, 0, text, [0; 96])
+    val p: *c.Event = ptr_cast(&t)
+
+    Event(*p)
+end text_input_event
 
 // A user event carrying a code, which is the usual way one part of a program wakes another.
 //

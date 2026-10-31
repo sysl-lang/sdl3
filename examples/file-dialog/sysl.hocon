@@ -10,7 +10,7 @@ package {
 }
 
 dependencies {
-  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.17" }
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.18" }
 }
 
 requires {

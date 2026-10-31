@@ -1,0 +1,80 @@
+// A window with a square to drag, driven from outside while you watch.
+//
+//     ./control /tmp/app.sock
+//     curl --unix-socket /tmp/app.sock http://app/drag -d from=100,100 -d to=500,300 -d duration=1000
+//     curl --unix-socket /tmp/app.sock http://app/shot -o shot.png
+//     curl --unix-socket /tmp/app.sock http://app/count
+//
+// The square follows the events, as it would a real mouse, and it knows nothing of who sent them. The
+// controlled pointer is drawn from `Control.pointer`, and grows a box while it is pressed. `/count` is
+// a route of the program's own. Escape, real or sent, ends it.
+
+import sh.sysl.sdl3.*
+import sh.sysl.sdl3.control.{json, listen}
+
+struct Square
+    x: f32
+    y: f32
+    held: bool
+    drops: int
+
+    contains(self, x: f32, y: f32) -> bool = x >= self.x && x < self.x + 80 && y >= self.y && y < self.y + 80
+
+main(args: []string)
+    init()
+
+    val socket = if args.len > 1 then args[1] else "/tmp/sdl3-control-example.sock"
+    val window = create_window("Controlled", 640, 400).expect("a window")
+    val renderer = window.create_renderer().expect("a renderer")
+    val control = listen(socket, Some(window)).expect("the control socket")
+    val square: &Square = Square(100, 100, false, 0)
+
+    control.route((req) ->
+        if req.path == "/count" then Some(json(200, f"{\"drops\":${square.drops}}\n")) else None)
+
+    renderer.set_vsync(true)
+    print(f"listening on ${control.path()}")
+
+    var running = true
+
+    while running
+        control.poll()
+
+        loop
+            val e = poll_event() match
+                Some(e) -> e
+                None -> break
+
+            e.kind() match
+                EventKind.Quit -> running = false
+                EventKind.KeyDown -> if e.key_scancode() == SCANCODE_ESCAPE then running = false
+                EventKind.MouseButtonDown -> square.held = square.contains(e.mouse_x(), e.mouse_y())
+                EventKind.MouseButtonUp ->
+                    if square.held then square.drops += 1
+
+                    square.held = false
+                EventKind.MouseMotion ->
+                    if square.held
+                        square.x += e.mouse_dx()
+                        square.y += e.mouse_dy()
+                _ -> ()
+
+        renderer.set_draw_color(Color(24, 26, 32, 255))
+        renderer.clear()
+        renderer.set_draw_color(if square.held then Color(240, 170, 60, 255) else Color(70, 140, 230, 255))
+        renderer.fill_rect(square.x, square.y, 80, 80)
+
+        val p = control.pointer()
+
+        if p.seen
+            renderer.set_draw_color(Color(255, 255, 255, 255))
+            renderer.fill_rect(p.x - 3, p.y - 3, 6, 6)
+
+            if p.down then renderer.draw_rect(p.x - 10, p.y - 10, 20, 20)
+
+        control.capture(renderer)
+        renderer.present()
+
+    control.close()
+    quit()
+end main

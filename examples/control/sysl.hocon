@@ -1,0 +1,20 @@
+// A window driven from outside over `sh.sysl.sdl3.control`.
+//
+//     sysl build . --lib ../..
+//
+// Named by coordinate like any program of the package; `--lib ../..` builds it against this checkout.
+package {
+  name    = "control"
+  version = "0.0.1"
+  sysl    = "0.8.8"
+}
+
+dependencies {
+  sdl3 { git = "github.com/sysl-lang/sdl3", version = "0.3.18" }
+}
+
+requires {
+  os    = true
+  posix = true
+  heap  = true
+}

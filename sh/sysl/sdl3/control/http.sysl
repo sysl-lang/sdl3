@@ -1,0 +1,373 @@
+module sh.sysl.sdl3.control
+@requires(posix)
+
+// The small HTTP/1.1 this module speaks, as pure functions over bytes.
+//
+// `parse_request` takes everything a connection has sent so far and answers one of three things:
+// there is not enough yet, here is the request, or this can never be a request. So a request split
+// across reads, however it was split, is the same call made again with more bytes, and nothing here
+// knows there is a socket.
+//
+// **What is refused rather than half-understood:** `Transfer-Encoding`, two `Content-Length`s that
+// disagree, a folded header, a bare LF for a line ending. The clients are `curl` and programs like it,
+// and each of those shapes is one a server and a client can read two ways.
+
+import sysl.buf.{Buf, buf}
+import sysl.text.{eq_fold, from_utf8, from_utf8_lossy, str_builder}
+
+/** The most a request line and its headers may come to, in bytes. */
+val max_head: usize = 8192
+
+/** The most a request's body may come to, in bytes. */
+val max_body: usize = 1048576
+
+/** One header as it arrived: the name's case is the client's. */
+struct Header
+    name: string
+    value: string
+
+/** A complete request. `path` is the target up to any `?`, undecoded; `query` is the rest. */
+struct Request
+    method: string
+    path: string
+    query: string
+    headers: Buf[Header]
+    body: Buf[u8]
+
+    /** The first header of this name, whatever the case of either. */
+    header(self, name: string) -> Option[string]
+        for i in 0..<self.headers.len()
+            val h = self.headers.at(i)
+
+            if eq_fold(h.name, name) then return Some(h.value)
+
+        None
+    end header
+
+    /** A parameter by name: from the query first, then from a form-encoded body. Decoded, and `None`
+     * for one that is absent or is not UTF-8 once decoded.
+     */
+    param(self, name: string) -> Option[string]
+        form_value(self.query.bytes, name) match
+            Some(v) -> Some(v)
+            None -> form_value(self.body.view(), name)
+    end param
+end Request
+
+/** What `parse_request` makes of the bytes so far. */
+enum Parsed
+    /** Nothing wrong, and more is needed. */
+    Incomplete
+    /** A request, which took the first `used` bytes. */
+    Complete(request: Request, used: usize)
+    /** Never a request, however much more arrives: answer `status` and hang up. */
+    Bad(status: int, reason: string)
+
+private is_token_byte(b: u8) -> bool
+    if b >= u8('a') && b <= u8('z') then return true
+    if b >= u8('A') && b <= u8('Z') then return true
+    if b >= u8('0') && b <= u8('9') then return true
+
+    b == u8('-') || b == u8('_') || b == u8('.')
+end is_token_byte
+
+// The offset of the first CRLF at or after `from`, or the input's length.
+private line_end(b: []const u8, from: usize) -> usize
+    var i = from
+
+    while i + 1 < b.len
+        if b[i] == 13 && b[i + 1] == 10 then return i
+
+        i += 1
+
+    b.len
+end line_end
+
+// The offset just past the blank line that ends the head, if the head has ended.
+private head_end(b: []const u8) -> Option[usize]
+    var i: usize = 0
+
+    while i + 3 < b.len
+        if b[i] == 13 && b[i + 1] == 10 && b[i + 2] == 13 && b[i + 3] == 10 then return Some(i + 4)
+
+        i += 1
+
+    None
+end head_end
+
+private trimmed(b: []const u8) -> []const u8
+    var from: usize = 0
+    var to = b.len
+
+    while from < to && (b[from] == 32 || b[from] == 9) do from += 1
+    while to > from && (b[to - 1] == 32 || b[to - 1] == 9) do to -= 1
+
+    b[from..<to]
+end trimmed
+
+// A `Content-Length` value: digits only. `None` for anything else; a value too long to matter answers
+// one past the limit, so the caller refuses it for its size and not for its spelling.
+private content_length(b: []const u8) -> Option[usize]
+    if b.len == 0 then return None
+
+    var n: usize = 0
+
+    for i in 0..<b.len
+        if b[i] < u8('0') || b[i] > u8('9') then return None
+
+        if n <= max_body then n = n * 10 + usize(b[i] - u8('0'))
+
+    Some(n)
+end content_length
+
+private has_control(b: []const u8) -> bool
+    for i in 0..<b.len
+        if (b[i] < 32 && b[i] != 9) || b[i] == 127 then return true
+
+    false
+end has_control
+
+private bad_request(reason: string) -> Parsed = Bad(400, reason)
+
+/** Read one request from the front of what a connection has sent so far. */
+parse_request(b: []const u8) -> Parsed
+    val end_of_head = head_end(b[0..<(if b.len < max_head then b.len else max_head)]) match
+        Some(n) -> n
+        None -> return if b.len >= max_head then Bad(413, "the request's head is too large") else Incomplete
+
+    val first = line_end(b, 0)
+    val line = b[0..<first]
+    var sp1 = line.len
+    var sp2 = line.len
+
+    for i in 0..<line.len
+        if line[i] == 32
+            if sp1 == line.len
+                sp1 = i
+            else if sp2 == line.len
+                sp2 = i
+            else
+                return bad_request("the request line has too many spaces")
+
+    if sp2 == line.len then return bad_request("the request line is not three words")
+
+    val method = line[0..<sp1]
+    val target = line[sp1 + 1..<sp2]
+    val version = line[sp2 + 1..<line.len]
+
+    if method.len == 0 then return bad_request("the request line has no method")
+
+    for i in 0..<method.len
+        if !is_token_byte(method[i]) then return bad_request("the method is not a token")
+
+    if target.len == 0 || target[0] != u8('/') then return bad_request("the target does not start with /")
+    if has_control(target) then return bad_request("the target holds a control character")
+
+    val version_text = from_utf8_lossy(version)
+
+    if version_text != "HTTP/1.1" && version_text != "HTTP/1.0" then return bad_request("the version is not HTTP/1.x")
+
+    var headers: Buf[Header] = buf()
+    var length: Option[usize] = None
+    var at = first + 2
+
+    while at < end_of_head - 2
+        val stop = line_end(b, at)
+        val row = b[at..<stop]
+
+        at = stop + 2
+
+        if row[0] == 32 || row[0] == 9 then return bad_request("a header is folded")
+
+        var colon = row.len
+
+        for i in 0..<row.len
+            if row[i] == u8(':')
+                colon = i
+                break
+
+        if colon == 0 || colon == row.len then return bad_request("a header has no name")
+
+        for i in 0..<colon
+            if !is_token_byte(row[i]) then return bad_request("a header's name is not a token")
+
+        val value = trimmed(row[colon + 1..<row.len])
+
+        if has_control(value) then return bad_request("a header's value holds a control character")
+
+        val name = from_utf8_lossy(row[0..<colon])
+
+        if eq_fold(name, "Transfer-Encoding") then return bad_request("Transfer-Encoding is not supported")
+
+        if eq_fold(name, "Content-Length")
+            val n = content_length(value) match
+                Some(n) -> n
+                None -> return bad_request("Content-Length is not a number")
+
+            length match
+                Some(m) -> if m != n then return bad_request("two Content-Lengths disagree")
+                None -> length = Some(n)
+
+        headers.push(Header(name, from_utf8_lossy(value)))
+
+    val body_len = length.unwrap_or(0)
+
+    if body_len > max_body then return Bad(413, "the request's body is too large")
+    if b.len < end_of_head + body_len then return Incomplete
+
+    val target_text = from_utf8(target) match
+        Ok(t) -> t
+        Err(_) -> return bad_request("the target is not UTF-8")
+
+    var question = target.len
+
+    for i in 0..<target.len
+        if target[i] == u8('?')
+            question = i
+            break
+
+    val path = target_text[0..<question]
+    val query = if question < target.len then target_text[question + 1..<target.len] else ""
+    var body: Buf[u8] = buf()
+
+    body.extend(b[end_of_head..<end_of_head + body_len])
+
+    Complete(Request(from_utf8_lossy(method), path, query, headers, body), end_of_head + body_len)
+end parse_request
+
+private hex_value(b: u8) -> Option[u8]
+    if b >= u8('0') && b <= u8('9') then return Some(b - u8('0'))
+    if b >= u8('a') && b <= u8('f') then return Some(b - u8('a') + 10)
+    if b >= u8('A') && b <= u8('F') then return Some(b - u8('A') + 10)
+
+    None
+end hex_value
+
+/** `application/x-www-form-urlencoded` undone: `+` is a space and `%XX` a byte. A `%` that is not
+ * followed by two hex digits stands for itself. `None` when the bytes that come out are not UTF-8.
+ */
+form_decode(b: []const u8) -> Option[string]
+    var out: Buf[u8] = buf()
+    var i: usize = 0
+
+    while i < b.len
+        val here = b[i]
+
+        if here == u8('+')
+            out.push(32)
+            i += 1
+        else if here == u8('%') && i + 2 < b.len && hex_value(b[i + 1]).is_some() && hex_value(b[i + 2]).is_some()
+            out.push(hex_value(b[i + 1]).unwrap() * 16 + hex_value(b[i + 2]).unwrap())
+            i += 3
+        else
+            out.push(here)
+            i += 1
+
+    from_utf8(out.view()) match
+        Ok(s) -> Some(s)
+        Err(_) -> None
+end form_decode
+
+/** The value of `name` in a form-encoded run of `name=value&…`. A name with no `=` has the value "". */
+form_value(b: []const u8, name: string) -> Option[string]
+    var at: usize = 0
+
+    while at < b.len
+        var stop = at
+
+        while stop < b.len && b[stop] != u8('&') do stop += 1
+
+        var eq = at
+
+        while eq < stop && b[eq] != u8('=') do eq += 1
+
+        form_decode(b[at..<eq]) match
+            Some(n) ->
+                if n == name then return form_decode(if eq < stop then b[eq + 1..<stop] else b[0..<0])
+            None -> ()
+
+        at = stop + 1
+
+    None
+end form_value
+
+/** What goes back. Built with `json`, `text` or `bytes`. `allow` is the `Allow` header a 405 owes, and
+ * empty for everything else.
+ */
+struct Response
+    status: int
+    content_type: string
+    body: Buf[u8]
+    allow: string
+
+/** A response with a body of these bytes. */
+bytes(status: int, content_type: string, body: []const u8) -> Response
+    var b: Buf[u8] = buf()
+
+    b.extend(body)
+
+    Response(status, content_type, b, "")
+end bytes
+
+/** A JSON response. `body` is JSON already; `json_string` quotes a piece of text for it. */
+json(status: int, body: string) -> Response = bytes(status, "application/json", body.bytes)
+
+/** A plain text response. */
+text(status: int, body: string) -> Response = bytes(status, "text/plain; charset=utf-8", body.bytes)
+
+/** The JSON that says something went wrong, which is what every refusal here carries. */
+error_response(status: int, reason: string) -> Response =
+    json(status, f"{\"error\":${json_string(reason)}}\n")
+
+/** `s` as a JSON string, quotes included. */
+json_string(s: string) -> string
+    val hex = "0123456789abcdef"
+    var out = str_builder()
+
+    out.push("\"")
+
+    for ch in s.chars
+        val code = u32(ch)
+
+        if ch == '"'
+            out.push("\\\"")
+        else if ch == '\\'
+            out.push("\\\\")
+        else if code < 32
+            out.push("\\u00")
+            out.push(hex[usize(code >> 4)..<usize(code >> 4) + 1])
+            out.push(hex[usize(code & 15)..<usize(code & 15) + 1])
+        else
+            out.push_char(ch)
+
+    out.push("\"")
+    out.finish()
+end json_string
+
+/** The words that go with a status this module answers. */
+reason_phrase(status: int) -> string
+    status match
+        200 -> "OK"
+        400 -> "Bad Request"
+        404 -> "Not Found"
+        405 -> "Method Not Allowed"
+        408 -> "Request Timeout"
+        413 -> "Content Too Large"
+        500 -> "Internal Server Error"
+        503 -> "Service Unavailable"
+        _ -> "Unknown"
+end reason_phrase
+
+/** `r` as the bytes a connection carries. Every response closes its connection, and says so. */
+write_response(r: Response) -> Buf[u8]
+    var out: Buf[u8] = buf()
+    val head = f"HTTP/1.1 ${r.status} ${reason_phrase(r.status)}\r\nContent-Type: ${r.content_type}\r\nContent-Length: ${r.body.len()}\r\nConnection: close\r\n"
+
+    out.extend(head.bytes)
+
+    if r.allow.len > 0 then out.extend(f"Allow: ${r.allow}\r\n".bytes)
+
+    out.extend("\r\n".bytes)
+    out.extend(r.body.view())
+    out
+end write_response
