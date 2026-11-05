@@ -177,7 +177,7 @@ fuzzed_bytes_never_trap_the_parser()
         input.clear()
 
         for _ in 0..<rng.below(200)
-            input.push(alphabet.at(rng.below(alphabet.len())))
+            input.push(alphabet[rng.below(alphabet.len())])
 
         check_any(input.view())
 
@@ -192,7 +192,7 @@ fuzzed_mutations_of_a_valid_request_never_trap_the_parser()
         input.extend(valid)
 
         for _ in 0..<1 + rng.below(4)
-            input.set(rng.below(input.len()), u8(rng.below(256)))
+            input[rng.below(input.len())] = u8(rng.below(256))
 
         check_any(input.view())
 

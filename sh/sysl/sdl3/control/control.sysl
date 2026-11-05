@@ -442,7 +442,7 @@ struct Control
         var budget = read_budget
 
         for i in 0..<self.conns.len()
-            val conn = self.conns.at(i)
+            val conn = self.conns[i]
 
             if conn.phase == Phase.Reading
                 budget -= self.read_one(conn, now, budget)
@@ -494,7 +494,7 @@ struct Control
 
     private dispatch(&self, conn: &Conn, req: Request, now: long)
         for i in 0..<self.routes.len()
-            self.routes.at(i) match
+            self.routes[i] match
                 Answers(f) -> f(req) match
                     Some(r) ->
                         self.respond(conn, r, now)
@@ -632,7 +632,7 @@ struct Control
         var held = base
 
         for i in 0..<mods.len()
-            val m = mods.at(i)
+            val m = mods[i]
 
             held |= m.bit
             self.steps.push(Key(m.scancode, held, true))
@@ -644,10 +644,10 @@ struct Control
         var held = base
 
         for i in 0..<mods.len()
-            held |= mods.at(i).bit
+            held |= mods[i].bit
 
         for i in 0..<mods.len()
-            val m = mods.at(mods.len() - 1 - i)
+            val m = mods[mods.len() - 1 - i]
 
             held = (held & ~m.bit) | (base & m.bit)
             self.steps.push(Key(m.scancode, held, false))
@@ -704,7 +704,7 @@ struct Control
         var pushed = false
 
         while self.head < self.steps.len()
-            val done = self.steps.at(self.head) match
+            val done = self.steps[self.head] match
                 Glide(x, y, ms) ->
                     if pushed then return
 
@@ -843,7 +843,7 @@ struct Control
         val stop = now_ms() + write_budget_ms
 
         for i in 0..<self.conns.len()
-            val conn = self.conns.at(i)
+            val conn = self.conns[i]
 
             if conn.phase == Phase.Writing then write_some(conn, stop, now)
     end write_responses
@@ -854,7 +854,7 @@ struct Control
         while i > 0
             i -= 1
 
-            val conn = self.conns.at(i)
+            val conn = self.conns[i]
 
             if conn.deadline != 0 && now >= conn.deadline && conn.phase != Phase.Closed
                 conn.phase match
@@ -869,7 +869,7 @@ struct Control
         while i > 0
             i -= 1
 
-            if self.shots.at(i).phase != Phase.Waiting then _ = self.shots.remove(i)
+            if self.shots[i].phase != Phase.Waiting then _ = self.shots.remove(i)
     end sweep
 
     private answer_encoded(&self, encoded: Result[Buf[u8], string])
@@ -882,7 +882,7 @@ struct Control
         val now = now_ms()
 
         for i in 0..<self.shots.len()
-            self.respond(self.shots.at(i), r, now)
+            self.respond(self.shots[i], r, now)
 
         self.shots.clear()
     end answer_shots
@@ -913,7 +913,7 @@ private teardown(hold: &Hold, conns: Buf[&Conn], typed: Buf[CString])
 
     hold.closed = true
 
-    for i in 0..<conns.len() do shut(conns.at(i))
+    for i in 0..<conns.len() do shut(conns[i])
 
     conns.clear()
 

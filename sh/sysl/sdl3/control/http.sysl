@@ -38,7 +38,7 @@ struct Request
     /** The first header of this name, whatever the case of either. */
     header(self, name: string) -> Option[string]
         for i in 0..<self.headers.len()
-            val h = self.headers.at(i)
+            val h = self.headers[i]
 
             if eq_fold(h.name, name) then return Some(h.value)
 

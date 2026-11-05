@@ -269,12 +269,12 @@ a_click_comes_out_as_a_move_a_press_and_a_release_each_in_its_own_frame()
     val moved = events()
 
     assert_eq(moved.len(), 1usize, "the first frame has the move alone")
-    assert_eq(moved.at(0).kind(), EventKind.MouseMotion)
-    assert_eq(moved.at(0).mouse_x(), 40.5f32)
-    assert_eq(moved.at(0).mouse_y(), 20.0f32)
-    assert_eq(moved.at(0).window_id(), window.id())
-    assert_eq(moved.at(0).mouse_which(), 1u32)
-    assert_eq(moved.at(0).mouse_held(), 0u32, "nothing is held yet")
+    assert_eq(moved[0].kind(), EventKind.MouseMotion)
+    assert_eq(moved[0].mouse_x(), 40.5f32)
+    assert_eq(moved[0].mouse_y(), 20.0f32)
+    assert_eq(moved[0].window_id(), window.id())
+    assert_eq(moved[0].mouse_which(), 1u32)
+    assert_eq(moved[0].mouse_held(), 0u32, "nothing is held yet")
     assert(control.pointer().seen)
     assert_eq(control.pointer().x, 40.5f32)
     assert(!control.pointer().down)
@@ -284,10 +284,10 @@ a_click_comes_out_as_a_move_a_press_and_a_release_each_in_its_own_frame()
     val pressed = events()
 
     assert_eq(pressed.len(), 1usize)
-    assert_eq(pressed.at(0).kind(), EventKind.MouseButtonDown)
-    assert_eq(pressed.at(0).mouse_button(), MouseButton.Right)
-    assert_eq(pressed.at(0).mouse_clicks(), 1u8)
-    assert_eq(pressed.at(0).mouse_x(), 40.5f32)
+    assert_eq(pressed[0].kind(), EventKind.MouseButtonDown)
+    assert_eq(pressed[0].mouse_button(), MouseButton.Right)
+    assert_eq(pressed[0].mouse_clicks(), 1u8)
+    assert_eq(pressed[0].mouse_x(), 40.5f32)
     assert(control.pointer().down, "the pointer says so while it is")
     assert_eq(control.pointer().button, MouseButton.Right)
     assert(control.active())
@@ -300,8 +300,8 @@ a_click_comes_out_as_a_move_a_press_and_a_release_each_in_its_own_frame()
     val released = events()
 
     assert_eq(released.len(), 1usize)
-    assert_eq(released.at(0).kind(), EventKind.MouseButtonUp)
-    assert_eq(released.at(0).mouse_button(), MouseButton.Right)
+    assert_eq(released[0].kind(), EventKind.MouseButtonUp)
+    assert_eq(released[0].mouse_button(), MouseButton.Right)
     assert(!control.pointer().down)
     assert(!control.active())
 
@@ -326,10 +326,10 @@ clicks_two_is_a_double_click()
     val got = events()
 
     assert_eq(got.len(), 5usize, "a move and two presses")
-    assert_eq(got.at(1).mouse_clicks(), 1u8)
-    assert_eq(got.at(3).kind(), EventKind.MouseButtonDown)
-    assert_eq(got.at(3).mouse_clicks(), 2u8)
-    assert_eq(got.at(4).mouse_clicks(), 2u8)
+    assert_eq(got[1].mouse_clicks(), 1u8)
+    assert_eq(got[3].kind(), EventKind.MouseButtonDown)
+    assert_eq(got[3].mouse_clicks(), 2u8)
+    assert_eq(got[4].mouse_clicks(), 2u8)
     control.close()
     remove_dir_all(dir).unwrap()
 
@@ -373,7 +373,7 @@ parameters_work_in_the_query_as_well()
     var clock: long = 0
 
     assert_eq(status_of(ask(control, &clock, "POST", "/click?x=7&y=8")), 200)
-    assert_eq(events().at(0).mouse_x(), 7.0f32)
+    assert_eq(events()[0].mouse_x(), 7.0f32)
     control.close()
     remove_dir_all(dir).unwrap()
 
@@ -403,7 +403,7 @@ a_drag_spreads_over_frames_at_the_pace_of_the_clock()
         assert(got.len() <= 1, "at most one event a frame")
 
         if got.len() == 1
-            val e = got.at(0)
+            val e = got[0]
 
             e.kind() match
                 EventKind.MouseButtonDown ->
@@ -456,7 +456,7 @@ a_slow_frame_rate_takes_longer_steps_and_the_same_time()
 
         val got = events()
 
-        if got.len() == 1 && got.at(0).kind() == EventKind.MouseMotion then moves += 1
+        if got.len() == 1 && got[0].kind() == EventKind.MouseMotion then moves += 1
 
     assert(moves >= 2 && moves <= 4, f"40 ms a frame over 100 ms is three moves, near enough, not $moves")
     assert_eq(control.pointer().x, 100.0f32)
@@ -572,10 +572,10 @@ private mouse_seen(all: Buf[Heard]) -> Buf[Heard]
     var out: Buf[Heard] = buf()
 
     for i in 0..<all.len()
-        val k = all.at(i).kind
+        val k = all[i].kind
 
         if k == EventKind.MouseButtonDown || k == EventKind.MouseButtonUp || k == EventKind.MouseMotion
-            out.push(all.at(i))
+            out.push(all[i])
 
     out
 end mouse_seen
@@ -599,13 +599,13 @@ every_modifier_name_is_accepted_and_each_comes_out_as_its_key()
         val got = events()
 
         assert_eq(got.len(), 5usize, f"${names[i]}: key down, move, press, release, key up")
-        assert_eq(got.at(0).kind(), EventKind.KeyDown)
-        assert_eq(got.at(0).key_scancode(), keys[i], names[i])
-        assert_eq(got.at(0).key_mod(), before | bits[i], names[i])
-        assert_eq(got.at(0).tag(), 0x434F4E54u32, "the modifier event is tagged like the rest")
-        assert_eq(got.at(4).kind(), EventKind.KeyUp)
-        assert_eq(got.at(4).key_scancode(), keys[i], names[i])
-        assert_eq(got.at(4).key_mod(), before, names[i])
+        assert_eq(got[0].kind(), EventKind.KeyDown)
+        assert_eq(got[0].key_scancode(), keys[i], names[i])
+        assert_eq(got[0].key_mod(), before | bits[i], names[i])
+        assert_eq(got[0].tag(), 0x434F4E54u32, "the modifier event is tagged like the rest")
+        assert_eq(got[4].kind(), EventKind.KeyUp)
+        assert_eq(got[4].key_scancode(), keys[i], names[i])
+        assert_eq(got[4].key_mod(), before, names[i])
 
     control.close()
     remove_dir_all(dir).unwrap()
@@ -627,14 +627,14 @@ modifiers_combine_whatever_the_separator_and_empty_means_none()
         val got = events()
 
         assert_eq(got.len(), 7usize, spelling)
-        assert_eq(got.at(0).key_scancode(), SCANCODE_LSHIFT)
-        assert_eq(got.at(0).key_mod(), before | KMOD_LSHIFT)
-        assert_eq(got.at(1).key_scancode(), SCANCODE_LGUI)
-        assert_eq(got.at(1).key_mod(), both, spelling)
-        assert_eq(got.at(5).key_scancode(), SCANCODE_LGUI, "they come up in reverse")
-        assert_eq(got.at(5).key_mod(), before | KMOD_LSHIFT)
-        assert_eq(got.at(6).key_scancode(), SCANCODE_LSHIFT)
-        assert_eq(got.at(6).key_mod(), before)
+        assert_eq(got[0].key_scancode(), SCANCODE_LSHIFT)
+        assert_eq(got[0].key_mod(), before | KMOD_LSHIFT)
+        assert_eq(got[1].key_scancode(), SCANCODE_LGUI)
+        assert_eq(got[1].key_mod(), both, spelling)
+        assert_eq(got[5].key_scancode(), SCANCODE_LGUI, "they come up in reverse")
+        assert_eq(got[5].key_mod(), before | KMOD_LSHIFT)
+        assert_eq(got[6].key_scancode(), SCANCODE_LSHIFT)
+        assert_eq(got[6].key_mod(), before)
 
     assert_eq(status_of(ask(control, &clock, "POST", "/click", "x=1&y=1&mods=")), 200)
     assert_eq(events().len(), 3usize, "an empty mods is no keys at all")
@@ -680,10 +680,10 @@ the_program_sees_a_shift_during_the_click_and_not_after()
     assert_eq(mouse.len(), 3usize, "a move, a press and a release")
 
     for i in 0..<mouse.len()
-        assert_eq(mouse.at(i).mods, before | KMOD_LSHIFT, f"mouse event $i sees the shift")
+        assert_eq(mouse[i].mods, before | KMOD_LSHIFT, f"mouse event $i sees the shift")
 
     assert_eq(mod_state(), before, "and it is gone afterwards")
-    assert_eq(seen.at(seen.len() - 1).mods, before, "from the last event on")
+    assert_eq(seen[seen.len() - 1].mods, before, "from the last event on")
     control.close()
     remove_dir_all(dir).unwrap()
 
@@ -703,7 +703,7 @@ a_click_without_mods_after_a_shift_click_sees_none()
     assert_eq(plain.len(), 3usize)
 
     for i in 0..<plain.len()
-        assert_eq(plain.at(i).mods, before, f"mouse event $i of the plain click")
+        assert_eq(plain[i].mods, before, f"mouse event $i of the plain click")
 
     control.close()
     remove_dir_all(dir).unwrap()
@@ -721,14 +721,14 @@ a_drag_holds_its_modifiers_from_press_to_release()
     val held = before | KMOD_LCTRL | KMOD_LALT
 
     assert(mouse.len() >= 3usize)
-    assert_eq(mouse.at(0).mods, held)
-    assert_eq(mouse.at(mouse.len() - 1).kind, EventKind.MouseButtonUp)
+    assert_eq(mouse[0].mods, held)
+    assert_eq(mouse[mouse.len() - 1].kind, EventKind.MouseButtonUp)
 
     for i in 0..<mouse.len()
-        assert_eq(mouse.at(i).mods, held, f"mouse event $i of the drag")
+        assert_eq(mouse[i].mods, held, f"mouse event $i of the drag")
 
-    assert_eq(seen.at(0).kind, EventKind.KeyDown)
-    assert_eq(seen.at(seen.len() - 1).kind, EventKind.KeyUp)
+    assert_eq(seen[0].kind, EventKind.KeyDown)
+    assert_eq(seen[seen.len() - 1].kind, EventKind.KeyUp)
     assert_eq(mod_state(), before)
     control.close()
     remove_dir_all(dir).unwrap()
@@ -759,13 +759,13 @@ a_key_with_modifiers_comes_out_as_a_keyboard_would_send_it()
     val mods = [KMOD_LCTRL, both, both, both, KMOD_LCTRL, 0]
 
     for i in 0..<6
-        assert_eq(got.at(i).kind(), kinds[i], f"event $i")
-        assert_eq(got.at(i).key_scancode(), scancodes[i], f"event $i")
-        assert_eq(got.at(i).key_mod(), before | mods[i], f"event $i")
-        assert_eq(got.at(i).window_id(), window.id())
-        assert(!got.at(i).key_repeat())
+        assert_eq(got[i].kind(), kinds[i], f"event $i")
+        assert_eq(got[i].key_scancode(), scancodes[i], f"event $i")
+        assert_eq(got[i].key_mod(), before | mods[i], f"event $i")
+        assert_eq(got[i].window_id(), window.id())
+        assert(!got[i].key_repeat())
 
-    assert_eq(got.at(2).key_code(), sh.sysl.sdl3.c.get_key_from_scancode(SCANCODE_A, both, true), "the keycode the modifiers make")
+    assert_eq(got[2].key_code(), sh.sysl.sdl3.c.get_key_from_scancode(SCANCODE_A, both, true), "the keycode the modifiers make")
     assert_eq(mod_state(), before, "and SDL's modifiers are as they were")
     control.close()
     remove_dir_all(dir).unwrap()
@@ -804,12 +804,12 @@ key_names_are_sdls_in_any_case_with_the_two_common_shorthands()
         val (name, scancode) = names[i]
 
         assert_eq(status_of(ask(control, &clock, "POST", "/key", f"key=$name")), 200, name)
-        assert_eq(events().at(0).key_scancode(), scancode, name)
+        assert_eq(events()[0].key_scancode(), scancode, name)
 
     assert_eq(status_of(ask(control, &clock, "POST", "/key", "key=esc")), 200)
-    assert_eq(events().at(0).key_scancode(), sh.sysl.sdl3.SCANCODE_ESCAPE)
+    assert_eq(events()[0].key_scancode(), sh.sysl.sdl3.SCANCODE_ESCAPE)
     assert_eq(status_of(ask(control, &clock, "POST", "/key", "key=del")), 200)
-    assert_eq(events().at(0).key_scancode(), sh.sysl.sdl3.SCANCODE_DELETE)
+    assert_eq(events()[0].key_scancode(), sh.sysl.sdl3.SCANCODE_DELETE)
     assert_eq(status_of(ask(control, &clock, "POST", "/key", "key=x&mods=ctrl+shift")), 200, "a + in a form is a space, and reads the same")
     assert_eq(events().len(), 6usize)
     control.close()
@@ -831,8 +831,8 @@ text_is_typed_a_character_a_frame_with_its_utf_8_whole()
         val got = events()
 
         assert_eq(got.len(), 1usize, f"character $i")
-        assert_eq(got.at(0).kind(), EventKind.TextInput)
-        assert_eq(got.at(0).text(), want[i])
+        assert_eq(got[0].kind(), EventKind.TextInput)
+        assert_eq(got[0].text(), want[i])
 
     var clock: long = 10
 
@@ -855,12 +855,12 @@ a_newline_or_a_tab_is_a_key_and_not_text()
     val got = events()
 
     assert_eq(got.len(), 6usize)
-    assert_eq(got.at(0).text(), "a")
-    assert_eq(got.at(1).kind(), EventKind.KeyDown)
-    assert_eq(got.at(1).key_scancode(), SCANCODE_RETURN)
-    assert_eq(got.at(2).kind(), EventKind.KeyUp)
-    assert_eq(got.at(3).text(), "b")
-    assert_eq(got.at(4).key_scancode(), sh.sysl.sdl3.SCANCODE_TAB)
+    assert_eq(got[0].text(), "a")
+    assert_eq(got[1].kind(), EventKind.KeyDown)
+    assert_eq(got[1].key_scancode(), SCANCODE_RETURN)
+    assert_eq(got[2].kind(), EventKind.KeyUp)
+    assert_eq(got[3].text(), "b")
+    assert_eq(got[4].key_scancode(), sh.sysl.sdl3.SCANCODE_TAB)
     control.close()
     remove_dir_all(dir).unwrap()
 
@@ -900,7 +900,7 @@ typed_text_stays_readable_until_the_program_gets_to_it()
     assert_eq(got.len(), 200usize)
 
     for i in 0..<200
-        assert_eq(got.at(i).text(), "q")
+        assert_eq(got[i].text(), "q")
 
     control.close()
     remove_dir_all(dir).unwrap()
@@ -1065,7 +1065,7 @@ private trace(control: &Control, window: &Window, cl: &Client, clock: *long) -> 
         val got = events()
 
         for i in 0..<got.len()
-            out.push(f"$frame: ${describe(got.at(i), window)}")
+            out.push(f"$frame: ${describe(got[i], window)}")
 
         drain(cl)
 
@@ -1328,8 +1328,8 @@ one_frame_reads_at_most_its_budget_and_the_next_reads_the_rest()
     for i in 0..<16
         var clock: long = 2 + long(i)
 
-        finish(control, clients.at(i), &clock)
-        assert_eq(status_of(clients.at(i)), 200)
+        finish(control, clients[i], &clock)
+        assert_eq(status_of(clients[i]), 200)
 
     control.close()
     remove_dir_all(dir).unwrap()
@@ -1639,7 +1639,7 @@ idle_connections_hold_their_places_and_the_rest_wait_their_turn()
     assert_eq(status_of(late), 200)
 
     for i in 0..<16
-        _ = idle.at(i).socket.close()
+        _ = idle[i].socket.close()
 
     control.close()
     remove_dir_all(dir).unwrap()
@@ -1865,7 +1865,7 @@ private run_frames(control: &Control, frames: int, window_id: u32 = 0) -> Seen
         val got = events()
 
         for i in 0..<got.len()
-            val e = got.at(i)
+            val e = got[i]
 
             if e.tag() != 0
                 s.controlled.push(e.kind())
@@ -1895,10 +1895,10 @@ real_mouse_events_do_not_mix_into_a_controlled_drag_and_come_back_after_it()
     val s = run_frames(control, 20)
 
     assert_eq(s.controlled.len(), 4usize, "the move, the press, the move and the release all arrive")
-    assert_eq(s.controlled.at(0), EventKind.MouseMotion)
-    assert_eq(s.controlled.at(1), EventKind.MouseButtonDown)
-    assert_eq(s.controlled.at(2), EventKind.MouseMotion)
-    assert_eq(s.controlled.at(3), EventKind.MouseButtonUp)
+    assert_eq(s.controlled[0], EventKind.MouseMotion)
+    assert_eq(s.controlled[1], EventKind.MouseButtonDown)
+    assert_eq(s.controlled[2], EventKind.MouseMotion)
+    assert_eq(s.controlled[3], EventKind.MouseButtonUp)
     assert(s.first_real_mouse >= s.last_controlled + 2, f"real motion waits one frame past the last event: ${s.first_real_mouse} vs ${s.last_controlled}")
     assert(s.first_real_key >= 0 && s.first_real_key < s.first_real_mouse, "a drag does not hold the keyboard off")
 
@@ -1919,8 +1919,8 @@ real_keys_do_not_mix_into_typed_text_and_the_mouse_is_left_alone()
     val s = run_frames(control, 20)
 
     assert_eq(s.controlled.len(), 2usize, "both characters arrive")
-    assert_eq(s.controlled.at(0), EventKind.TextInput)
-    assert_eq(s.controlled.at(1), EventKind.TextInput)
+    assert_eq(s.controlled[0], EventKind.TextInput)
+    assert_eq(s.controlled[1], EventKind.TextInput)
     assert(s.first_real_key >= s.last_controlled + 2, "real keys wait one frame past the last character")
     assert_eq(s.first_real_mouse, 0, "typing does not hold the mouse off")
 
@@ -1941,8 +1941,8 @@ real_keys_do_not_mix_into_a_controlled_key()
     val s = run_frames(control, 20)
 
     assert_eq(s.controlled.len(), 2usize, "the press and the release")
-    assert_eq(s.controlled.at(0), EventKind.KeyDown)
-    assert_eq(s.controlled.at(1), EventKind.KeyUp)
+    assert_eq(s.controlled[0], EventKind.KeyDown)
+    assert_eq(s.controlled[1], EventKind.KeyUp)
     assert(s.first_real_key >= s.last_controlled + 2)
 
     var clock: long = 1000
@@ -2028,7 +2028,7 @@ the_programs_own_event_filter_still_runs_and_is_put_back()
     // is pushed while the guard is in place and reaches the program's filter only by being chained to.
     var releases = 0
 
-    for i in 0..<app_kinds.len() do if app_kinds.at(i) == EVENT_MOUSE_BUTTON_UP then releases += 1
+    for i in 0..<app_kinds.len() do if app_kinds[i] == EVENT_MOUSE_BUTTON_UP then releases += 1
 
     assert(releases >= 1, "the program's filter sees what the guard lets through")
 
