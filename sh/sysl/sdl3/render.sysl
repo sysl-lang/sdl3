@@ -216,7 +216,7 @@ struct Renderer
 
     // Draw arbitrary triangles. `indices` may be empty, in which case the vertices are taken three
     // at a time. Nothing is textured, so the vertices' own colours decide.
-    draw_geometry(&self, vertices: []Vertex, indices: []i32) -> bool
+    draw_geometry(&self, vertices: []const Vertex, indices: []const i32) -> bool
         if vertices.len == 0 then return true
 
         c.render_geometry(self.handle, null, as_ptr(vertices), i32(vertices.len),
@@ -224,7 +224,7 @@ struct Renderer
     end draw_geometry
 
     // The same, textured: the vertices' `u`/`v` select from `t`.
-    draw_geometry_textured(&self, t: &Texture, vertices: []Vertex, indices: []i32) -> bool
+    draw_geometry_textured(&self, t: &Texture, vertices: []const Vertex, indices: []const i32) -> bool
         if vertices.len == 0 then return true
 
         c.render_geometry(self.handle, t.handle, as_ptr(vertices), i32(vertices.len),

@@ -1106,7 +1106,7 @@ surface_png(frame: &Surface) -> Result[Buf[u8], string]
 
     for y in 0..<h do out.extend(pixels[y * pitch..<y * pitch + w * 3])
 
-    encode_rgb(w, h, out.view())
+    encode_rgb(w, h, out.view_mut())
 end surface_png
 
 /** Tightly packed RGBA bytes as a PNG, with the alpha dropped. */
@@ -1127,7 +1127,7 @@ rgba_png(width: int, height: int, rgba: []const u8) -> Result[Buf[u8], string]
         out.push(rgba[i * 4 + 1])
         out.push(rgba[i * 4 + 2])
 
-    encode_rgb(w, h, out.view())
+    encode_rgb(w, h, out.view_mut())
 end rgba_png
 
 // Level 1: a shot is made inside a frame, and speed is worth more here than bytes.

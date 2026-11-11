@@ -111,7 +111,7 @@ end status_of
 
 private process_status(s: string) -> int = sysl.text.parse_int(s).unwrap_or(0)
 
-private body_of(cl: &Client) -> []u8
+private body_of(cl: &Client) -> []const u8
     val at = cl.got.view().index_of("\r\n\r\n".bytes).unwrap()
 
     cl.got.view()[at + 4..<cl.got.len()]
@@ -2064,7 +2064,7 @@ closing_in_the_middle_of_a_gesture_lets_real_events_through_again()
     _ = cl.socket.close()
     remove_dir_all(dir).unwrap()
 
-private event_list() -> []Event = events().view()
+private event_list() -> []const Event = events().view()
 
 // ## The real client
 
