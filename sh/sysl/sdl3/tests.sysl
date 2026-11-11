@@ -1196,6 +1196,26 @@ an_audio_stream_takes_samples()
     assert_eq(s.queued(), 0i32, "and nothing is queued")
     assert(s.resume(), "resumed")
 
+@test
+an_audio_stream_takes_a_read_only_view()
+    set_hint("SDL_AUDIO_DRIVER", "dummy")
+
+    assert(init_audio(), "the audio subsystem came up")
+
+    val s = open_audio_stream(48000, 1).expect("the stream opened")
+    var b: Buf[f32] = buf()
+    var raw: Buf[u8] = buf()
+
+    for i in 0..<480 do b.push(0.25)
+    for i in 0..<64 do raw.push(0)
+
+    assert(s.pause(), "paused")
+    assert(s.put(b.view()), "a Buf's read-only view was queued with no view_mut")
+    assert(s.queued() >= 1920, "all of it is waiting")
+    assert(s.put_bytes(raw.view()), "and so were bytes")
+    assert(s.queued() >= 1984, "and they joined the queue")
+    assert(s.put(b.view()[0..<0]), "an empty read-only view is accepted")
+
 // Wait for a recording stream to have something, at most a second, and answer what it has.
 private recorded(s: &AudioStream) -> i32
     var rounds = 0
@@ -1317,7 +1337,7 @@ a_dialog_reaches_its_callback_and_strands_nothing()
     dialog_failures = 0
     dialog_runs = 0
 
-    var filters: []FileFilter = [
+    val filters: []const FileFilter = [
         FileFilter("Images", "png;jpg"),
         FileFilter("Everything", "*"),
     ]

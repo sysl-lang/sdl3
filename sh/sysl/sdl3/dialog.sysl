@@ -182,7 +182,7 @@ end take_slot
 // The callback runs once and is then forgotten. Up to sixteen dialogs may be up at a time; `false`
 // means there was no slot left, and the callback will not run.
 show_file_dialog(kind: FileDialogKind, callback: &Fn(DialogResult) -> unit,
-                 window: Option[&Window] = None, filters: []FileFilter = [], location: string = "",
+                 window: Option[&Window] = None, filters: []const FileFilter = [], location: string = "",
                  many: bool = false, title: string = "", accept: string = "",
                  cancel: string = "") -> bool
     val slot = take_slot()
@@ -226,14 +226,14 @@ end start_dialog
 
 // Ask the user to pick an existing file, or several with `many`.
 show_open_file_dialog(callback: &Fn(DialogResult) -> unit, window: Option[&Window] = None,
-                      filters: []FileFilter = [], location: string = "", many: bool = false,
+                      filters: []const FileFilter = [], location: string = "", many: bool = false,
                       title: string = "", accept: string = "", cancel: string = "") -> bool =
     show_file_dialog(OpenFile, callback, window, filters, location, many, title, accept, cancel)
 
 // Ask the user to name a file to write. The path need not exist, and the panel does the "already
 // exists — overwrite?" prompt itself.
 show_save_file_dialog(callback: &Fn(DialogResult) -> unit, window: Option[&Window] = None,
-                      filters: []FileFilter = [], location: string = "",
+                      filters: []const FileFilter = [], location: string = "",
                       title: string = "", accept: string = "", cancel: string = "") -> bool =
     show_file_dialog(SaveFile, callback, window, filters, location, false, title, accept, cancel)
 

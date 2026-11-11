@@ -257,7 +257,7 @@ struct Renderer
     // A filled convex polygon, triangulated as a fan from the first point. Fewer than three points
     // draws nothing; a *concave* outline drawn this way comes out wrong rather than refused, which
     // is the same bargain a fan always makes.
-    fill_convex_polygon(&self, points: []FPoint, color: Color) -> bool
+    fill_convex_polygon(&self, points: []const FPoint, color: Color) -> bool
         if points.len < 3 then return true
 
         var verts: Buf[Vertex] = buf()
