@@ -44,7 +44,7 @@ package {
   // checked against this release's rule for what leaves `with`, and against nothing older.
   // `sh.sysl.sdl3.control` needs the Unix domain sockets and `non_blocking` that arrived in 0.8.8, and
   // the send that answers an error rather than raising `SIGPIPE`, and `set_send_buffer`, of 0.8.10.
-  sysl = "0.9.0"
+  sysl = "0.10.0"
 }
 
 // **`posix`, because SDL is a hosted library.** It opens devices, starts threads, talks to a window
