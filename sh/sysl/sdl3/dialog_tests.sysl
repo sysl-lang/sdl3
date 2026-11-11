@@ -6,7 +6,7 @@ import sysl.raw.{ptr_cast, str_cast}
 import sysl.slices.as_ptr
 import sysl.text.{CString, cstring, from_cstring}
 import sysl.buf.{Buf, buf}
-import sysl.threads.spawn
+import sysl.threads.scope
 import sysl.process
 
 // Everything about a file dialog except the system's own panel. A test calls the function SDL calls,
@@ -288,9 +288,9 @@ another_thread_reaches_the_main_side()
     val a = enlist(recorder(s), [])
     val two = paths_of(["/x", "/y"])
     var job = Answerer(address(a), two.files(), true)
-    val t = spawn(&answer, &job).expect("a thread")
+    val jp = &job
 
-    t.join()
+    scope((sc) -> sc.spawn(() -> answer(jp)))
     assert(!job.on_main, "SDL's thread was not the main one")
     assert_eq(s.results.len(), 0usize, "that thread ran no callback")
     assert_eq(deliver_dialogs(), 1, "the main side took it")
@@ -313,8 +313,9 @@ another_thread_failure_reads_its_own_error()
     set_error_text("the main thread's error")
 
     var job = Answerer(address(a), null, true)
+    val jp = &job
 
-    spawn(&answer, &job).expect("a thread").join()
+    scope((sc) -> sc.spawn(() -> answer(jp)))
     deliver_dialogs()
 
     val text = failure_of(s.results[0])
@@ -332,10 +333,11 @@ another_thread_wakes_the_loop()
     val a = enlist(recorder(s), [])
     val one = paths_of(["/x"])
     var job = Answerer(address(a), one.files(), true)
-    val t = spawn(&answer, &job).expect("a thread")
-    val woke = wait_event_timeout(10000)
+    val jp = &job
+    val woke = scope((sc) ->
+        sc.spawn(() -> answer(jp))
+        wait_event_timeout(10000))
 
-    t.join()
     assert(woke.is_some(), "the wait ended")
 
     woke.unwrap().kind() match
@@ -375,19 +377,23 @@ answers_survive_concurrent_delivery()
     for i in 0..<threads
         jobs[i] = Burst(as_ptr(keys), i * each, (i + 1) * each, pair.files())
 
-    val a = spawn(&burst, &jobs[0]).expect("a thread")
-    val b = spawn(&burst, &jobs[1]).expect("a thread")
-    val d = spawn(&burst, &jobs[2]).expect("a thread")
-    val e = spawn(&burst, &jobs[3]).expect("a thread")
-    var ran = 0
+    val j0 = &jobs[0]
+    val j1 = &jobs[1]
+    val j2 = &jobs[2]
+    val j3 = &jobs[3]
+    val ran = scope((sc) ->
+        sc.spawn(() -> burst(j0))
+        sc.spawn(() -> burst(j1))
+        sc.spawn(() -> burst(j2))
+        sc.spawn(() -> burst(j3))
 
-    while ran < int(keys.len)
-        ran += deliver_dialogs()
+        var n = 0
 
-    a.join()
-    b.join()
-    d.join()
-    e.join()
+        while n < int(keys.len)
+            n += deliver_dialogs()
+
+        n)
+
     assert_eq(ran, int(keys.len), "every answer, once")
     assert_eq(s.main_thread, ran, "all on the main thread")
     assert_eq(dialogs_waiting(), 0usize, "nothing stranded")

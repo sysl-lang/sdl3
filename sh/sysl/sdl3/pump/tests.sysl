@@ -8,7 +8,7 @@ module sh.sysl.sdl3.pump
 
 import sysl.buf.{Buf, buf}
 import sysl.sync.Atomic
-import sysl.threads.spawn
+import sysl.threads.scope
 import sysl.time.{Duration, millis, micros, whole_micros}
 import sysl.posix.time.{monotonic, sleep}
 import sh.sysl.kairos.event_loop
@@ -94,9 +94,9 @@ refused_off_the_main_thread()
     events_only()
 
     var r = Refused(-1)
-    val t = spawn(&off_main, &r).unwrap()
+    val rp = &r
 
-    assert(t.join())
+    scope((sc) -> sc.spawn(() -> off_main(rp)))
     assert_eq(r.answer, 0, "NotMainThread")
     assert_eq(s"${PumpError.NotMainThread}", "the SDL pump must be made on the main thread")
     quit()
@@ -188,14 +188,13 @@ an_event_from_another_thread_ends_a_wait()
     val s = seen()
     val p = sdl_pump(recorder(s)).expect("main thread")
     var job = Later(30, 99, () -> (), 0)
+    val jp = &job
     val started = monotonic()
-    val t = spawn(&later, &job).unwrap()
+    val took = scope((sc) ->
+        sc.spawn(() -> later(jp))
+        p.wait(None)
+        ms_since(started))
 
-    p.wait(None)
-
-    val took = ms_since(started)
-
-    assert(t.join())
     assert(took >= 25 && took < 1000, s"ended by the event: $took ms")
     assert_eq(s.codes.len(), 1)
     assert_eq(s.codes[0], 99i32)
@@ -209,14 +208,13 @@ the_waker_ends_a_wait()
     val s = seen()
     val p = sdl_pump(recorder(s)).expect("main thread")
     var job = Later(30, -1, p.waker(), 1)
+    val jp = &job
     val started = monotonic()
-    val t = spawn(&later, &job).unwrap()
+    val took = scope((sc) ->
+        sc.spawn(() -> later(jp))
+        p.wait(None)
+        ms_since(started))
 
-    p.wait(None)
-
-    val took = ms_since(started)
-
-    assert(t.join())
     assert(took >= 25 && took < 1000, s"ended by the wake: $took ms")
     assert_eq(s.codes.len(), 0, "the wake is the pump's own")
     assert_eq(s.others, 0, "and not passed on as any other kind either")
@@ -297,13 +295,12 @@ a_timer_and_an_sdl_event_in_one_loop()
     lp.after(millis(80), (l) -> log.push(s"timer at ${elapsed_ms()}"))
 
     var job = Later(30, 5, () -> (), 0)
-    val t = spawn(&later, &job).unwrap()
+    val jp = &job
+    val took = scope((sc) ->
+        sc.spawn(() -> later(jp))
+        lp.run()
+        elapsed_ms())
 
-    lp.run()
-
-    val took = elapsed_ms()
-
-    assert(t.join())
     assert_eq(log.len(), 2, s"both arrived: $log")
     assert(log[0].starts_with("sdl 5 at "), s"the SDL event first: ${log[0]}")
     assert(log[1].starts_with("timer at "), s"then the timer: ${log[1]}")
@@ -324,14 +321,13 @@ the_composed_waker_ends_a_pumped_wait()
     val p = sdl_pump(recorder(s)).expect("main thread")
     val d = pumped(host(), p)
     var job = Later(30, -1, d.waker(), 3)
+    val jp = &job
     val started = monotonic()
-    val t = spawn(&later, &job).unwrap()
+    val took = scope((sc) ->
+        sc.spawn(() -> later(jp))
+        d.idle_until(None)
+        ms_since(started))
 
-    d.idle_until(None)
-
-    val took = ms_since(started)
-
-    assert(t.join())
     assert(took >= 25 && took < 1000, s"ended by the wake: $took ms")
     assert_eq(s.codes.len(), 0)
     assert_eq(s.others, 0)
