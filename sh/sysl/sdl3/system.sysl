@@ -74,6 +74,9 @@ send_android_message(command: u32, param: i32) -> bool =
 // **It is `&sync` because the answer may arrive on another thread** — SDL says so, and on Android it
 // is the UI thread whenever the user had to be asked. The reference counts are therefore atomic,
 // and the callback is a `&sync Fn`, which is what lets the compiler check what it captured.
+// `@unchecked(Share)`: `me` is written once before the request is handed to SDL and once by the
+// single answer, which SDL delivers after that, so the two writes never overlap.
+@unchecked(Share)
 struct PermissionRequest
     private me: Option[&sync PermissionRequest]
     private answer: &sync Fn(bool) -> unit

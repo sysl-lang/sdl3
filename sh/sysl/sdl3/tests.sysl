@@ -3,6 +3,7 @@ module sh.sysl.sdl3
 
 import sh.sysl.sdl3.c
 import sysl.raw.ptr_cast
+import sysl.sync.Atomic
 import sysl.text.{cstring, from_cstring}
 import sysl.buf.{Buf, buf}
 import sysl.text.Search
@@ -1712,7 +1713,7 @@ the_hint_names_are_the_headers_strings()
 // ## Android
 
 private struct Asked
-    times: int
+    times: Atomic[int]
 
 // **Off Android both calls answer `false` and touch nothing**, which is what lets a program call them
 // unconditionally. The callback in particular must not run: SDL documents that a refused request is
@@ -1723,11 +1724,11 @@ the_android_calls_answer_false_everywhere_else()
 
     assert(!send_android_message(ANDROID_COMMAND_USER + 1, 5), "no activity to post to")
 
-    var asked: &sync Asked = Asked(0)
+    var asked: &sync Asked = Asked(Atomic(0))
 
-    assert(!request_android_permission("android.permission.CAMERA", (granted) -> asked.times += 1),
+    assert(!request_android_permission("android.permission.CAMERA", (granted) -> asked.times.add(1)),
            "nothing to ask")
-    assert_eq(asked.times, 0, "and nothing answered")
+    assert_eq(asked.times.load(), 0, "and nothing answered")
 
 // SDL's own commands sit below `ANDROID_COMMAND_USER` and are refused before they are sent, on every
 // target — one of them is the keep-screen-on switch, and a program reaching it by number would
